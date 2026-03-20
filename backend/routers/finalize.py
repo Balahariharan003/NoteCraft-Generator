@@ -5,6 +5,7 @@ from models import FinalizeRequest
 from session.store import (
     get_session,
     get_all_chunks,
+    create_session,
     get_failed_chunks,
     save_chunk,
     save_block_summaries,
@@ -38,10 +39,15 @@ async def finalize(request: FinalizeRequest):
     session_id = request.session_id
     session    = get_session(session_id)
 
+    # ── Auto-create session if it doesn't exist ────────────────
+    # This handles direct API testing without prior chunk uploads
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        create_session(session_id, request.participants, [
+            e.dict() for e in request.speaker_timeline
+        ])
+        session = get_session(session_id)
 
-    # Update speaker timeline and participants if extension sent new data
+    # ── Update speaker timeline and participants ────────────────
     if request.speaker_timeline:
         session["speaker_timeline"] = [
             e.dict() for e in request.speaker_timeline

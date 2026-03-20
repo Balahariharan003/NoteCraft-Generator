@@ -2,36 +2,22 @@
   "manifest_version": 3,
   "name": "MoM Generator",
   "version": "1.0",
-  "description": "Automatically generate Minutes of Meeting from Google Meet / Zoom",
-
+  "description": "Automatically generate Minutes of Meeting from Google Meet",
   "permissions": [
     "tabCapture",
+    "offscreen",
+    "storage",
     "activeTab",
     "scripting",
-    "storage"
+    "tabs"
   ],
-
   "host_permissions": [
     "http://localhost:8000/*"
   ],
-
   "background": {
     "service_worker": "background.js"
   },
-
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "MoM Generator"
-  },
-
-  "content_scripts": [
-    {
-      "matches": [
-        "https://meet.google.com/*",
-        "https://*.zoom.us/*",
-        "https://teams.microsoft.com/*"
-      ],
-      "js": ["content.js"]
-    }
-  ]
+    "default_popup": "popup.html"
+  }
 }

@@ -8,7 +8,6 @@
 </head>
 <body>
 
-  <!-- ── Header ─────────────────────────────────────── -->
   <div class="header">
     <div class="logo">
       <div class="logo-dot"></div>
@@ -16,62 +15,47 @@
     </div>
   </div>
 
-  <!-- ── STATE: IDLE ────────────────────────────────── -->
+  <!-- IDLE -->
   <div id="state-idle" class="state active">
-    <p class="hint">Open Google Meet or Zoom, then click Start.</p>
-    <button id="btn-start" class="btn btn-primary">
-      Start Recording
-    </button>
+    <p class="hint">Open Google Meet and click Start Recording.</p>
+    <button id="btn-start" class="btn btn-primary">Start Recording</button>
   </div>
 
-  <!-- ── STATE: RECORDING ───────────────────────────── -->
+  <!-- RECORDING -->
   <div id="state-recording" class="state">
     <div class="recording-indicator">
       <div class="pulse-dot"></div>
       <span>Recording</span>
     </div>
     <div id="timer" class="timer">00:00:00</div>
-    <p class="hint-small">Audio is being captured and processed live.</p>
-    <button id="btn-stop" class="btn btn-danger">
-      End Meeting
-    </button>
+    <p class="hint-small">Audio is being captured live.</p>
+    <button id="btn-stop" class="btn btn-danger">End Meeting</button>
   </div>
 
-  <!-- ── STATE: PROCESSING ──────────────────────────── -->
+  <!-- PROCESSING -->
   <div id="state-processing" class="state">
     <div class="spinner"></div>
     <p id="processing-text" class="status-text">Processing meeting...</p>
     <p class="hint-small">Please wait. Do not close this window.</p>
   </div>
 
-  <!-- ── STATE: READY ───────────────────────────────── -->
+  <!-- READY -->
   <div id="state-ready" class="state">
     <div class="success-icon">&#10003;</div>
     <p class="status-text">MoM is ready!</p>
     <div class="download-buttons">
-      <a id="btn-pdf" class="btn btn-download" target="_blank">
-        Download PDF
-      </a>
-      <a id="btn-docx" class="btn btn-download" target="_blank">
-        Download DOCX
-      </a>
+      <a id="btn-docx" class="btn btn-download" target="_blank">Download DOCX</a>
     </div>
-    <button id="btn-new" class="btn btn-ghost">
-      New Recording
-    </button>
+    <button id="btn-new" class="btn btn-ghost">New Recording</button>
   </div>
 
-  <!-- ── STATE: ERROR ───────────────────────────────── -->
+  <!-- ERROR -->
   <div id="state-error" class="state">
     <div class="error-icon">&#10007;</div>
     <p class="status-text">Processing failed.</p>
     <p class="hint-small">Please retry.</p>
-    <button id="btn-retry" class="btn btn-primary">
-      Retry
-    </button>
-    <button id="btn-new-error" class="btn btn-ghost">
-      Start New
-    </button>
+    <button id="btn-retry" class="btn btn-primary">Retry</button>
+    <button id="btn-new-error" class="btn btn-ghost">Start New</button>
   </div>
 
   <script src="popup.js"></script>

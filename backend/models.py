@@ -1,31 +1,58 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import List, Optional
 
 
 # ── /upload-chunk ──────────────────────────────────────────────
-# audio file comes as multipart/form-data (handled in router)
-# these fields come alongside the file as form fields
-
 class SpeakerEvent(BaseModel):
     name: str
-    timestamp_ms: int  # milliseconds from recording start
+    timestamp_ms: int
+
+    # Tolerate floats from JS (e.g. 12345.0 → 12345)
+    @field_validator("timestamp_ms", mode="before")
+    @classmethod
+    def coerce_to_int(cls, v):
+        return int(v)
 
 
 class ChunkMeta(BaseModel):
-    session_id:      str
-    chunk_index:     int
+    session_id:       str
+    chunk_index:      int
     speaker_timeline: List[SpeakerEvent] = []
-    participants:    List[str] = []
+    participants:     List[str] = []
 
 
-# ── /finalize ─────────────────────────────────────────────────
+# ── /finalize ──────────────────────────────────────────────────
 class FinalizeRequest(BaseModel):
-    session_id:      str
-    participants:    List[str] = []
+    session_id:       str
+    participants:     List[str] = []
     speaker_timeline: List[SpeakerEvent] = []
 
+    # Tolerate speaker_timeline accidentally sent as JSON string
+    @field_validator("speaker_timeline", mode="before")
+    @classmethod
+    def parse_timeline_string(cls, v):
+        if isinstance(v, str):
+            import json
+            try:
+                return json.loads(v)
+            except Exception:
+                return []
+        return v
 
-# ── /status ───────────────────────────────────────────────────
+    # Tolerate participants accidentally sent as JSON string
+    @field_validator("participants", mode="before")
+    @classmethod
+    def parse_participants_string(cls, v):
+        if isinstance(v, str):
+            import json
+            try:
+                return json.loads(v)
+            except Exception:
+                return []
+        return v
+
+
+# ── /status ────────────────────────────────────────────────────
 class StatusResponse(BaseModel):
     session_id: str
     status:     str            # "processing" | "ready" | "failed"
@@ -33,11 +60,11 @@ class StatusResponse(BaseModel):
     docx_url:   Optional[str] = None
 
 
-# ── Internal chunk data stored in session ─────────────────────
+# ── Internal chunk data stored in session ──────────────────────
 class ChunkData(BaseModel):
-    raw:     str = ""          # raw transcript from Sarvam STT
-    clean:   str = ""          # cleaned transcript from Sarvam-M
-    summary: str = ""          # segment summary from Sarvam-M
+    raw:     str = ""
+    clean:   str = ""
+    summary: str = ""
     status:  str = "pending"   # "pending" | "ok" | "failed"
 
 

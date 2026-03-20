@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 import os
 from models import StatusResponse
 from session.store import get_session, delete_session
@@ -34,14 +35,16 @@ async def get_status(session_id: str):
 async def download_file(filename: str):
     """
     Serves the generated PDF or DOCX file for download.
-    Deletes the session data after the file is served.
+    Deletes the file AFTER it is fully sent to the user.
     """
-    file_path = os.path.join(OUTPUTS_DIR, filename)
+    file_path = os.path.abspath(
+        os.path.join(OUTPUTS_DIR, filename)
+    )
 
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Extract session_id from filename (e.g. "abc123.pdf" -> "abc123")
+    # Extract session_id from filename (e.g. "test-001.pdf" -> "test-001")
     session_id = filename.rsplit(".", 1)[0]
 
     # Determine media type
@@ -55,36 +58,33 @@ async def download_file(filename: str):
     else:
         raise HTTPException(status_code=400, detail="Invalid file type")
 
-    # Delete session after both files are served
-    # We delete on DOCX download (last file) to ensure PDF was downloaded first
-    # For simplicity in college project — delete on any download
-    response = FileResponse(
-        path         = file_path,
-        filename     = filename,
-        media_type   = media_type,
+    # ── KEY FIX: use BackgroundTask ────────────────────────────
+    # BackgroundTask runs AFTER the file is fully sent to the user
+    # Previously cleanup ran BEFORE serving — causing the 500 error
+    return FileResponse(
+        path        = file_path,
+        filename    = filename,
+        media_type  = media_type,
+        background  = BackgroundTask(
+            _cleanup_after_download, session_id, file_path
+        ),
     )
 
-    # Cleanup after response is sent
-    _schedule_cleanup(session_id, file_path)
 
-    return response
-
-
-# ── Schedule cleanup after download ───────────────────────────
-def _schedule_cleanup(session_id: str, file_path: str):
+# ── Cleanup runs AFTER file is fully downloaded ────────────────
+def _cleanup_after_download(session_id: str, file_path: str):
     """
-    Deletes the file and session data.
-    Called after serving the download.
+    Deletes the served file.
+    If no more output files exist for this session — delete session.
     """
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
             print(f"Deleted file: {file_path}")
 
-        # Only delete session when all outputs are gone
-        outputs_dir = OUTPUTS_DIR
+        # Check if any other output files remain for this session
         remaining = [
-            f for f in os.listdir(outputs_dir)
+            f for f in os.listdir(OUTPUTS_DIR)
             if f.startswith(session_id)
         ]
 

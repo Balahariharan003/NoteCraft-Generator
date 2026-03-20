@@ -1,7 +1,8 @@
-const BACKEND_URL = "http://localhost:8000";
-const POLL_INTERVAL_MS = 2000; // poll /status every 2 seconds
+// popup.js — full UI with Start/Stop recording
 
-// ── Element references ─────────────────────────────────────────
+const BACKEND_URL   = "http://localhost:8000";
+const POLL_INTERVAL = 2000;
+
 const states = {
   idle:       document.getElementById("state-idle"),
   recording:  document.getElementById("state-recording"),
@@ -10,37 +11,36 @@ const states = {
   error:      document.getElementById("state-error"),
 };
 
-const btnStart     = document.getElementById("btn-start");
-const btnStop      = document.getElementById("btn-stop");
-const btnRetry     = document.getElementById("btn-retry");
-const btnNew       = document.getElementById("btn-new");
-const btnNewError  = document.getElementById("btn-new-error");
-const btnPdf       = document.getElementById("btn-pdf");
-const btnDocx      = document.getElementById("btn-docx");
-const timerEl      = document.getElementById("timer");
-const processingTxt= document.getElementById("processing-text");
+const btnStart      = document.getElementById("btn-start");
+const btnStop       = document.getElementById("btn-stop");
+const btnRetry      = document.getElementById("btn-retry");
+const btnNew        = document.getElementById("btn-new");
+const btnNewError   = document.getElementById("btn-new-error");
+const btnDocx       = document.getElementById("btn-docx");
+const timerEl       = document.getElementById("timer");
+const processingTxt = document.getElementById("processing-text");
 
-// ── State ──────────────────────────────────────────────────────
 let timerInterval  = null;
 let pollInterval   = null;
 let elapsedSeconds = 0;
 let currentSession = null;
 
-// ── Show a specific state panel ────────────────────────────────
+// ── Show state ─────────────────────────────────────────────────
 function showState(name) {
-  Object.values(states).forEach((el) => el.classList.remove("active"));
-  states[name].classList.add("active");
+  Object.values(states).forEach((el) => el?.classList.remove("active"));
+  states[name]?.classList.add("active");
 }
 
-// ── Timer helpers ──────────────────────────────────────────────
+// ── Timer ──────────────────────────────────────────────────────
 function startTimer() {
   elapsedSeconds = 0;
+  if (timerEl) timerEl.textContent = "00:00:00";
   timerInterval = setInterval(() => {
     elapsedSeconds++;
     const h = String(Math.floor(elapsedSeconds / 3600)).padStart(2, "0");
     const m = String(Math.floor((elapsedSeconds % 3600) / 60)).padStart(2, "0");
     const s = String(elapsedSeconds % 60).padStart(2, "0");
-    timerEl.textContent = `${h}:${m}:${s}`;
+    if (timerEl) timerEl.textContent = `${h}:${m}:${s}`;
   }, 1000);
 }
 
@@ -49,43 +49,39 @@ function stopTimer() {
   timerInterval = null;
 }
 
-// ── Processing status messages ─────────────────────────────────
+// ── Processing messages ────────────────────────────────────────
 const processingMessages = [
-  { delay: 0,     text: "Processing meeting..."   },
-  { delay: 10000, text: "Mapping speakers..."      },
-  { delay: 25000, text: "Generating MoM..."        },
-  { delay: 60000, text: "Preparing download..."    },
+  { delay: 0,     text: "Processing meeting..."  },
+  { delay: 10000, text: "Mapping speakers..."    },
+  { delay: 25000, text: "Generating MoM..."      },
+  { delay: 60000, text: "Preparing download..."  },
 ];
 
 function startProcessingMessages() {
   processingMessages.forEach(({ delay, text }) => {
-    setTimeout(() => {
-      if (processingTxt) processingTxt.textContent = text;
-    }, delay);
+    setTimeout(() => { if (processingTxt) processingTxt.textContent = text; }, delay);
   });
 }
 
-// ── Poll /status until ready or failed ────────────────────────
-function startPolling(sessionId) {
+// ── Polling ────────────────────────────────────────────────────
+function startPolling(sid) {
+  stopPolling();
   pollInterval = setInterval(async () => {
     try {
-      const res = await fetch(
-        `${BACKEND_URL}/status?session_id=${sessionId}`
-      );
+      const res  = await fetch(`${BACKEND_URL}/status?session_id=${sid}`);
+      if (res.status === 404) { stopPolling(); await resetToIdle(); return; }
       const data = await res.json();
-
       if (data.status === "ready") {
         stopPolling();
-        showReady(data.pdf_url, data.docx_url);
-      } else if (data.status === "failed") {
+        setDocxUrl(data.docx_url);
+        await chrome.storage.local.set({ currentState: "ready", docxUrl: data.docx_url || "" });
+        showState("ready");
+      } else if (data.status === "failed" || data.status === "error") {
         stopPolling();
         showState("error");
       }
-      // if status === "processing" — keep polling
-    } catch (err) {
-      console.error("Poll error:", err);
-    }
-  }, POLL_INTERVAL_MS);
+    } catch (e) { console.error("Poll error:", e); }
+  }, POLL_INTERVAL);
 }
 
 function stopPolling() {
@@ -93,27 +89,25 @@ function stopPolling() {
   pollInterval = null;
 }
 
-// ── Show ready state with download links ──────────────────────
-function showReady(pdfUrl, docxUrl) {
-  btnPdf.href  = `${BACKEND_URL}${pdfUrl}`;
-  btnDocx.href = `${BACKEND_URL}${docxUrl}`;
-  showState("ready");
+function setDocxUrl(url) {
+  if (btnDocx && url) btnDocx.href = `${BACKEND_URL}${url}`;
 }
 
-// ── Get the active tab ─────────────────────────────────────────
-async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({
-    active: true,
-    currentWindow: true,
-  });
-  return tab;
+// ── Reset ──────────────────────────────────────────────────────
+async function resetToIdle() {
+  stopPolling();
+  stopTimer();
+  currentSession = null;
+  elapsedSeconds = 0;
+  if (timerEl) timerEl.textContent = "00:00:00";
+  await chrome.storage.local.clear();
+  showState("idle");
 }
 
-// ── Button: Start Recording ────────────────────────────────────
-btnStart.addEventListener("click", async () => {
-  const tab = await getActiveTab();
+// ── Start Recording ────────────────────────────────────────────
+btnStart?.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  // Check if the user is on a supported meeting platform
   const supported =
     tab.url.includes("meet.google.com") ||
     tab.url.includes("zoom.us") ||
@@ -124,78 +118,120 @@ btnStart.addEventListener("click", async () => {
     return;
   }
 
-  // Tell background.js to start recording
-  const response = await chrome.runtime.sendMessage({
-    action: "START_RECORDING",
-    tabId: tab.id,
-  });
+  const res = await chrome.runtime.sendMessage({ action: "FLOATING_START", tabId: tab.id });
 
-  if (response?.success) {
-    currentSession = response.sessionId;
+  if (res?.success) {
+    currentSession = res.sessionId;
     showState("recording");
     startTimer();
+  } else {
+    alert("Could not start: " + (res?.error || "unknown"));
   }
 });
 
-// ── Button: End Meeting ────────────────────────────────────────
-btnStop.addEventListener("click", async () => {
+// ── Stop Recording ─────────────────────────────────────────────
+btnStop?.addEventListener("click", async () => {
   stopTimer();
   showState("processing");
   startProcessingMessages();
 
-  // Tell background.js to stop and finalize
-  await chrome.runtime.sendMessage({ action: "STOP_RECORDING" });
+  // Get session BEFORE sending stop message
+  const stored = await chrome.storage.local.get("currentSession");
+  currentSession = stored.currentSession || currentSession;
 
-  // Start polling for completion
+  chrome.runtime.sendMessage({ action: "FLOATING_STOP" });
+
+  await chrome.storage.local.set({ currentState: "processing", processingStarted: Date.now() });
+
   if (currentSession) {
+    console.log("Polling for session:", currentSession);
     startPolling(currentSession);
+  } else {
+    console.error("No session ID found — cannot poll");
   }
 });
 
-// ── Button: Retry ─────────────────────────────────────────────
-btnRetry.addEventListener("click", async () => {
+// ── Retry ──────────────────────────────────────────────────────
+btnRetry?.addEventListener("click", async () => {
   if (!currentSession) return;
   showState("processing");
   startProcessingMessages();
-
   try {
-    await fetch(`${BACKEND_URL}/finalize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    const res = await fetch(`${BACKEND_URL}/finalize`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: currentSession }),
     });
-    startPolling(currentSession);
-  } catch (err) {
-    showState("error");
-  }
+    if (res.ok) startPolling(currentSession); else showState("error");
+  } catch { showState("error"); }
 });
 
-// ── Button: New Recording ──────────────────────────────────────
-function resetToIdle() {
-  stopPolling();
-  stopTimer();
-  currentSession = null;
-  elapsedSeconds = 0;
-  timerEl.textContent = "00:00:00";
-  showState("idle");
-}
+// ── New / Reset ────────────────────────────────────────────────
+btnNew?.addEventListener("click", resetToIdle);
+btnNewError?.addEventListener("click", resetToIdle);
 
-btnNew.addEventListener("click", resetToIdle);
-btnNewError.addEventListener("click", resetToIdle);
+// ── Storage listener ───────────────────────────────────────────
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== "local") return;
+  const newState   = changes.currentState?.newValue;
+  const newSession = changes.currentSession?.newValue;
 
-// ── Init: restore state if popup was closed and reopened ───────
-(async () => {
-  const stored = await chrome.storage.local.get(["currentSession", "currentState"]);
-  if (stored.currentSession && stored.currentState === "recording") {
-    currentSession = stored.currentSession;
-    showState("recording");
-    startTimer();
-  } else if (stored.currentSession && stored.currentState === "processing") {
-    currentSession = stored.currentSession;
-    showState("processing");
-    startProcessingMessages();
-    startPolling(currentSession);
-  } else {
-    showState("idle");
+  if (newSession) currentSession = newSession;
+
+  if (newState === "recording") {
+    stopPolling(); stopTimer();
+    showState("recording"); startTimer();
   }
+  if (newState === "processing") {
+    stopTimer(); showState("processing"); startProcessingMessages();
+    if (currentSession) startPolling(currentSession);
+  }
+  if (newState === "ready") {
+    stopTimer(); stopPolling();
+    const docx = changes.docxUrl?.newValue;
+    if (docx) setDocxUrl(docx);
+    else { const s = await chrome.storage.local.get("docxUrl"); setDocxUrl(s.docxUrl); }
+    showState("ready");
+  }
+  if (newState === "error") { stopTimer(); stopPolling(); showState("error"); }
+});
+
+// ── Init ───────────────────────────────────────────────────────
+(async () => {
+  const stored = await chrome.storage.local.get([
+    "currentSession", "currentState", "processingStarted", "docxUrl"
+  ]);
+  const { currentSession: sid, currentState: state, docxUrl } = stored;
+
+  if (!sid || !state || state === "idle") { showState("idle"); return; }
+
+  currentSession = sid;
+
+  if (state === "recording") { showState("recording"); startTimer(); return; }
+
+  if (state === "ready") {
+    try {
+      const res  = await fetch(`${BACKEND_URL}/status?session_id=${sid}`);
+      if (res.status === 404) { await chrome.storage.local.clear(); showState("idle"); return; }
+      const data = await res.json();
+      if (data.status === "ready") { setDocxUrl(data.docx_url || docxUrl); showState("ready"); return; }
+    } catch { await chrome.storage.local.clear(); showState("idle"); return; }
+  }
+
+  if (state === "processing") {
+    try {
+      const res  = await fetch(`${BACKEND_URL}/status?session_id=${sid}`);
+      if (res.status === 404) { await chrome.storage.local.clear(); showState("idle"); return; }
+      const data = await res.json();
+      if (data.status === "ready")  { setDocxUrl(data.docx_url); showState("ready"); return; }
+      if (data.status === "failed") { showState("error"); return; }
+      if (Date.now() - (stored.processingStarted || 0) > 5 * 60 * 1000) {
+        await chrome.storage.local.clear(); showState("idle"); return;
+      }
+      showState("processing"); startProcessingMessages(); startPolling(sid);
+    } catch { await chrome.storage.local.clear(); showState("idle"); }
+    return;
+  }
+
+  if (state === "error") { showState("error"); return; }
+  showState("idle");
 })();

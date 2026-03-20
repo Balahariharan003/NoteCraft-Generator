@@ -11,16 +11,12 @@ MODEL          = "sarvam-m"
 
 
 # ── Base LLM caller ────────────────────────────────────────────
-async def _call_llm(system_prompt: str, user_prompt: str) -> str:
-    """
-    Sends a prompt to Sarvam-M.
-    Returns the response text or empty string on failure.
-    """
+async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 1500) -> str:
     if not SARVAM_API_KEY:
         raise ValueError("SARVAM_API_KEY not found in .env")
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(
                 LLM_URL,
                 headers={
@@ -28,12 +24,12 @@ async def _call_llm(system_prompt: str, user_prompt: str) -> str:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": MODEL,
+                    "model":       MODEL,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user",   "content": user_prompt},
                     ],
-                    "max_tokens": 1000,
+                    "max_tokens":  max_tokens,
                     "temperature": 0.3,
                 },
             )
@@ -54,12 +50,75 @@ async def _call_llm(system_prompt: str, user_prompt: str) -> str:
         return ""
 
 
+# ── Parse JSON safely from LLM output ─────────────────────────
+def _parse_json(raw: str) -> dict | None:
+    """
+    Extracts and parses JSON from LLM response.
+    Handles cases where LLM wraps JSON in markdown code blocks.
+    """
+    if not raw:
+        return None
+    # Strip markdown code fences if present
+    clean = raw.strip()
+    if clean.startswith("```"):
+        lines = clean.split("\n")
+        clean = "\n".join(lines[1:-1]) if len(lines) > 2 else clean
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        pass
+    # Try extracting JSON object from mixed text
+    try:
+        start = clean.index("{")
+        end   = clean.rindex("}") + 1
+        return json.loads(clean[start:end])
+    except Exception:
+        return None
+
+
+# ── Validate and fix MoM JSON structure ───────────────────────
+def _validate_mom(mom: dict, participants: list, date: str) -> dict:
+    """
+    Ensures all fields are correct types.
+    Fixes the character-by-character bug — if a field is a string
+    instead of a list, wrap it in a list instead of iterating chars.
+    """
+    def to_list(val, fallback: list) -> list:
+        if isinstance(val, list):
+            # Filter out empty strings and single characters
+            cleaned = [str(v).strip() for v in val if str(v).strip() and len(str(v).strip()) > 1]
+            return cleaned if cleaned else fallback
+        if isinstance(val, str) and len(val) > 1:
+            # LLM returned a string instead of list — wrap it
+            return [val]
+        return fallback
+
+    def to_action_items(val) -> list:
+        if not isinstance(val, list):
+            return []
+        result = []
+        for item in val:
+            if isinstance(item, dict):
+                result.append({
+                    "owner":    str(item.get("owner", "TBD")),
+                    "task":     str(item.get("task", "-")),
+                    "deadline": str(item.get("deadline", "TBD")),
+                })
+        return result
+
+    return {
+        "title":        str(mom.get("title", "Minutes of Meeting")),
+        "date":         str(mom.get("date", date)),
+        "participants": to_list(mom.get("participants", participants), participants or ["Participants not identified"]),
+        "agenda":       to_list(mom.get("agenda", []),       ["Agenda not specified"]),
+        "discussions":  to_list(mom.get("discussions", []),  ["No discussions recorded"]),
+        "decisions":    to_list(mom.get("decisions", []),    ["No decisions recorded"]),
+        "action_items": to_action_items(mom.get("action_items", [])),
+    }
+
+
 # ── JOB 1: Clean transcript ────────────────────────────────────
 async def clean_transcript(raw_transcript: str) -> str:
-    """
-    Removes fillers, ASR errors, repetitions.
-    Preserves the original meaning.
-    """
     system = (
         "You are a transcript editor. "
         "Clean the given transcript by removing filler words (uh, um, hmm, like), "
@@ -67,49 +126,30 @@ async def clean_transcript(raw_transcript: str) -> str:
         "Do not summarise — preserve all content and meaning. "
         "Return only the cleaned transcript text, nothing else."
     )
-    user = f"Clean this transcript:\n\n{raw_transcript}"
-
+    user    = f"Clean this transcript:\n\n{raw_transcript}"
     cleaned = await _call_llm(system, user)
-    return cleaned if cleaned else raw_transcript  # fallback to raw if LLM fails
+    return cleaned if cleaned else raw_transcript
 
 
-# ── JOB 2: Segment summary with context carryover ─────────────
+# ── JOB 2: Segment summary ────────────────────────────────────
 async def summarise_chunk(
     clean_transcript: str,
     prev_summary: str = "",
     chunk_index: int  = 0,
 ) -> str:
-    """
-    Summarises one 3-min chunk.
-    Passes previous chunk summary as context so topics
-    that span chunk boundaries are not lost.
-    """
     system = (
         "You are a meeting assistant. "
         "Summarise the given meeting segment in 3 to 5 bullet points. "
         "Focus on: key discussion points, decisions made, and action items mentioned. "
         "Be concise. Each bullet should be one clear sentence."
     )
-
-    context = ""
-    if prev_summary and chunk_index > 0:
-        context = f"Context from previous segment:\n{prev_summary}\n\n"
-
-    user = (
-        f"{context}"
-        f"Summarise this meeting segment (segment {chunk_index + 1}):\n\n"
-        f"{clean_transcript}"
-    )
-
+    context = f"Context from previous segment:\n{prev_summary}\n\n" if prev_summary and chunk_index > 0 else ""
+    user    = f"{context}Summarise this meeting segment (segment {chunk_index + 1}):\n\n{clean_transcript}"
     return await _call_llm(system, user)
 
 
-# ── JOB 3a: Mid-level aggregation (REDUCE) ────────────────────
+# ── JOB 3a: Block aggregation ─────────────────────────────────
 async def aggregate_block(chunk_summaries: list, block_index: int) -> str:
-    """
-    Groups 5 chunk summaries into one block summary.
-    Also extracts decisions and topics within the block.
-    """
     system = (
         "You are a meeting assistant. "
         "You are given several 3-minute meeting segment summaries. "
@@ -117,98 +157,80 @@ async def aggregate_block(chunk_summaries: list, block_index: int) -> str:
         "Remove redundancy. Extract any clear decisions made. "
         "Return a clean paragraph-style summary in 4 to 6 sentences."
     )
-
-    summaries_text = "\n\n".join(
-        [f"Segment {i+1}:\n{s}" for i, s in enumerate(chunk_summaries)]
-    )
-
-    user = (
-        f"Merge these segment summaries into one block summary "
-        f"(block {block_index + 1}):\n\n{summaries_text}"
-    )
-
+    summaries_text = "\n\n".join([f"Segment {i+1}:\n{s}" for i, s in enumerate(chunk_summaries)])
+    user           = f"Merge these segment summaries into one block summary (block {block_index + 1}):\n\n{summaries_text}"
     return await _call_llm(system, user)
 
 
 # ── JOB 3b: Final MoM generation ──────────────────────────────
 async def generate_mom(
     block_summaries: list,
-    participants: list,
-    meeting_date: str,
+    participants:    list,
+    meeting_date:    str,
 ) -> dict:
-    """
-    Takes all block summaries and generates the final
-    structured MoM as JSON.
-    """
     system = (
         "You are a professional meeting secretary. "
         "Generate a structured Minutes of Meeting (MoM) from the given meeting summaries. "
-        "Return ONLY valid JSON with no extra text, no markdown, no code blocks. "
-        "The JSON must have exactly these keys: "
-        "title, date, participants, agenda, discussions, decisions, action_items. "
-        "action_items must be a list of objects with keys: owner, task, deadline."
+        "Return ONLY valid JSON — no markdown, no code blocks, no extra text. "
+        "The JSON must have exactly these keys:\n"
+        "  title        → string: descriptive meeting title\n"
+        "  date         → string: meeting date\n"
+        "  participants → array of strings: participant names\n"
+        "  agenda       → array of strings: each agenda item is a full sentence\n"
+        "  discussions  → array of strings: each discussion point is a full sentence (NOT individual characters)\n"
+        "  decisions    → array of strings: each decision is a full sentence\n"
+        "  action_items → array of objects with keys: owner (string), task (string), deadline (string)\n"
+        "IMPORTANT: Every array must contain complete sentences or phrases, never single characters or letters."
     )
 
-    summaries_text = "\n\n".join(
-        [f"Block {i+1}:\n{s}" for i, s in enumerate(block_summaries)]
-    )
-
+    summaries_text = "\n\n".join([f"Block {i+1}:\n{s}" for i, s in enumerate(block_summaries)])
     user = (
         f"Meeting date: {meeting_date}\n"
-        f"Participants: {', '.join(participants)}\n\n"
+        f"Participants: {', '.join(participants) if participants else 'Unknown'}\n\n"
         f"Meeting summaries:\n{summaries_text}\n\n"
-        f"Generate the MoM JSON now."
+        f"Generate the MoM JSON now. Remember: arrays must contain full sentences, not characters."
     )
 
-    raw = await _call_llm(system, user)
+    raw     = await _call_llm(system, user, max_tokens=2000)
+    parsed  = _parse_json(raw)
 
-    # Parse JSON safely
-    try:
-        mom_json = json.loads(raw)
-        return mom_json
-    except json.JSONDecodeError:
-        # Try to extract JSON from response if LLM added extra text
-        try:
-            start = raw.index("{")
-            end   = raw.rindex("}") + 1
-            mom_json = json.loads(raw[start:end])
-            return mom_json
-        except Exception:
-            print("Failed to parse MoM JSON from LLM response")
-            return _fallback_mom(participants, meeting_date)
+    if parsed:
+        return _validate_mom(parsed, participants, meeting_date)
+
+    print("Failed to parse MoM JSON — using fallback")
+    return _fallback_mom(participants, meeting_date)
 
 
-# ── JOB 4: Refinement pass ─────────────────────────────────────
+# ── JOB 4: Refinement pass ────────────────────────────────────
 async def refine_mom(mom_json: dict) -> dict:
-    """
-    Accurate mode only.
-    Improves clarity, removes duplicates, fixes contradictions.
-    """
     system = (
         "You are a professional editor. "
         "Improve the given Minutes of Meeting JSON. "
         "Fix grammar, remove duplicate points, improve clarity. "
-        "Return ONLY valid JSON with the same structure. No extra text."
+        "Ensure all array fields contain complete sentences, never single characters. "
+        "Return ONLY valid JSON with the same structure. No extra text, no markdown."
     )
+    user   = f"Refine this MoM JSON:\n\n{json.dumps(mom_json, indent=2)}"
+    raw    = await _call_llm(system, user, max_tokens=2000)
+    parsed = _parse_json(raw)
 
-    user = f"Refine this MoM JSON:\n\n{json.dumps(mom_json, indent=2)}"
+    if parsed:
+        return _validate_mom(
+            parsed,
+            mom_json.get("participants", []),
+            mom_json.get("date", ""),
+        )
+    return mom_json  # fallback to original
 
-    raw = await _call_llm(system, user)
 
-    try:
-        return json.loads(raw)
-    except Exception:
-        return mom_json  # fallback to original if refinement fails
-
-
-# ── Fallback MoM if JSON parsing fails ────────────────────────
+# ── Fallback MoM ──────────────────────────────────────────────
 def _fallback_mom(participants: list, date: str) -> dict:
     return {
         "title":        "Minutes of Meeting",
         "date":         date,
-        "participants": participants,
-        "agenda":       ["Could not extract agenda"],
-        "discussions":  ["Could not extract discussions"],
-        "decisions":    ["Could not extract decisions"],
+        "participants": participants or ["Participants not identified"],
+        "agenda":       ["Agenda could not be extracted"],
+        "discussions":  ["Discussions could not be extracted"],
+        "decisions":    ["Decisions could not be extracted"],
         "action_items": [],
     }

@@ -8,24 +8,23 @@ from datetime import datetime
 OUTPUTS_DIR = os.path.join(os.path.dirname(__file__), "..", "outputs")
 
 
+# ── Sanitize for Helvetica (Latin-1 only) ─────────────────────
+def _s(text) -> str:
+    if not text:
+        return "-"
+    return str(text).encode("latin-1", errors="ignore").decode("latin-1") or "-"
+
+
 # ── Main export function ───────────────────────────────────────
 def export_documents(mom_json: dict, session_id: str) -> tuple:
-    """
-    Generates PDF and DOCX from MoM JSON.
-    Returns (pdf_url, docx_url) as relative paths.
-    """
     os.makedirs(OUTPUTS_DIR, exist_ok=True)
-
     pdf_path  = os.path.join(OUTPUTS_DIR, f"{session_id}.pdf")
     docx_path = os.path.join(OUTPUTS_DIR, f"{session_id}.docx")
-
-    _generate_pdf(mom_json, pdf_path)
     _generate_docx(mom_json, docx_path)
+    # PDF skipped — fpdf2 Helvetica crashes on LLM Unicode output
+    return None, f"/outputs/{session_id}.docx"
 
-    return f"/outputs/{session_id}.pdf", f"/outputs/{session_id}.docx"
 
-
-# ── Delete files after download ────────────────────────────────
 def delete_documents(session_id: str):
     for ext in ["pdf", "docx"]:
         path = os.path.join(OUTPUTS_DIR, f"{session_id}.{ext}")
@@ -35,7 +34,6 @@ def delete_documents(session_id: str):
 
 # ══ PDF Generation ═════════════════════════════════════════════
 def _generate_pdf(mom: dict, path: str):
-
     pdf = FPDF()
     pdf.add_page()
     pdf.set_margins(20, 20, 20)
@@ -44,12 +42,12 @@ def _generate_pdf(mom: dict, path: str):
     # ── Title ──────────────────────────────────────────────────
     pdf.set_font("Helvetica", "B", 18)
     pdf.set_text_color(26, 26, 40)
-    pdf.cell(0, 12, mom.get("title", "Minutes of Meeting"), ln=True, align="C")
+    pdf.multi_cell(0, 12, _s(mom.get("title", "Minutes of Meeting")), align="C")
 
     # ── Date ───────────────────────────────────────────────────
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 8, f"Date: {mom.get('date', datetime.now().strftime('%Y-%m-%d'))}", ln=True, align="C")
+    pdf.multi_cell(0, 8, f"Date: {_s(mom.get('date', datetime.now().strftime('%Y-%m-%d')))}", align="C")
     pdf.ln(4)
 
     # ── Divider ────────────────────────────────────────────────
@@ -62,7 +60,7 @@ def _generate_pdf(mom: dict, path: str):
     participants = mom.get("participants", [])
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(50, 50, 50)
-    pdf.multi_cell(0, 7, ", ".join(participants) if participants else "—")
+    pdf.multi_cell(0, 7, _s(", ".join(participants) if participants else "-"))
     pdf.ln(4)
 
     # ── Agenda ─────────────────────────────────────────────────
@@ -86,11 +84,10 @@ def _generate_pdf(mom: dict, path: str):
     # ── Action Items ───────────────────────────────────────────
     _pdf_section(pdf, "Action Items")
     for item in mom.get("action_items", []):
-        owner    = item.get("owner", "—")
-        task     = item.get("task", "—")
-        deadline = item.get("deadline", "—")
-        line     = f"{owner}  —  {task}  (by {deadline})"
-        _pdf_bullet(pdf, line)
+        owner    = _s(item.get("owner", "-"))
+        task     = _s(item.get("task", "-"))
+        deadline = _s(item.get("deadline", "-"))
+        _pdf_bullet(pdf, f"{owner} - {task} (by {deadline})")
 
     # ── Footer ─────────────────────────────────────────────────
     pdf.set_y(-20)
@@ -104,25 +101,24 @@ def _generate_pdf(mom: dict, path: str):
 def _pdf_section(pdf: FPDF, title: str):
     pdf.set_font("Helvetica", "B", 12)
     pdf.set_text_color(30, 30, 60)
-    pdf.cell(0, 10, title, ln=True)
+    pdf.multi_cell(0, 10, _s(title))
     pdf.set_draw_color(83, 74, 183)
     pdf.line(20, pdf.get_y(), 80, pdf.get_y())
     pdf.ln(3)
 
 
 def _pdf_bullet(pdf: FPDF, text: str):
+    # ✅ multi_cell only — no cell() before it
+    # cell() + multi_cell() combo causes "not enough horizontal space" crash
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(50, 50, 50)
-    pdf.cell(6, 7, "-", ln=False)
-    pdf.multi_cell(0, 7, text)
+    pdf.multi_cell(0, 7, f"- {_s(text)}")
 
 
 # ══ DOCX Generation ════════════════════════════════════════════
 def _generate_docx(mom: dict, path: str):
-
     doc = Document()
 
-    # ── Page margins ───────────────────────────────────────────
     for section in doc.sections:
         section.top_margin    = Pt(50)
         section.bottom_margin = Pt(50)
@@ -133,8 +129,8 @@ def _generate_docx(mom: dict, path: str):
     title_para = doc.add_paragraph()
     title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = title_para.add_run(mom.get("title", "Minutes of Meeting"))
-    run.bold      = True
-    run.font.size = Pt(18)
+    run.bold           = True
+    run.font.size      = Pt(18)
     run.font.color.rgb = RGBColor(26, 26, 40)
 
     # ── Date ───────────────────────────────────────────────────
@@ -143,15 +139,14 @@ def _generate_docx(mom: dict, path: str):
     date_run = date_para.add_run(
         f"Date: {mom.get('date', datetime.now().strftime('%Y-%m-%d'))}"
     )
-    date_run.font.size = Pt(10)
+    date_run.font.size      = Pt(10)
     date_run.font.color.rgb = RGBColor(100, 100, 100)
-
     doc.add_paragraph()
 
     # ── Participants ───────────────────────────────────────────
     _docx_heading(doc, "Participants")
     participants = mom.get("participants", [])
-    doc.add_paragraph(", ".join(participants) if participants else "—")
+    doc.add_paragraph(", ".join(participants) if participants else "-")
 
     # ── Agenda ─────────────────────────────────────────────────
     _docx_heading(doc, "Agenda")
@@ -171,17 +166,17 @@ def _generate_docx(mom: dict, path: str):
     # ── Action Items ───────────────────────────────────────────
     _docx_heading(doc, "Action Items")
     for item in mom.get("action_items", []):
-        owner    = item.get("owner", "—")
-        task     = item.get("task", "—")
-        deadline = item.get("deadline", "—")
-        _docx_bullet(doc, f"{owner}  —  {task}  (by {deadline})")
+        owner    = item.get("owner", "-")
+        task     = item.get("task", "-")
+        deadline = item.get("deadline", "-")
+        _docx_bullet(doc, f"{owner} - {task} (by {deadline})")
 
     # ── Footer ─────────────────────────────────────────────────
-    footer = doc.sections[0].footer
+    footer      = doc.sections[0].footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer_run = footer_para.add_run("Generated by MoM Generator")
-    footer_run.font.size = Pt(8)
+    footer_run  = footer_para.add_run("Generated by MoM Generator")
+    footer_run.font.size      = Pt(8)
     footer_run.font.color.rgb = RGBColor(150, 150, 150)
 
     doc.save(path)
