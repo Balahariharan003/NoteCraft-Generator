@@ -96,7 +96,6 @@ python-docx
 ### 3. Add your Sarvam API key
 
 Create `backend/.env`:
-```
 SARVAM_API_KEY=your_sarvam_api_key_here
 ```
 
