@@ -13,7 +13,6 @@ Automatically generate **Minutes of Meeting** from Google Meet, Zoom, or Microso
 - Exports a professional **PDF** and **DOCX** document
 - Deletes all data after download — privacy first
 
----
 
 ## Tech Stack
 
