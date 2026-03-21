@@ -1,7 +1,6 @@
-// popup.js — full UI with Start/Stop recording
-
-const BACKEND_URL   = "http://localhost:8000";
-const POLL_INTERVAL = 2000;
+const BACKEND_URL       = "http://localhost:8000";
+const POLL_INTERVAL     = 2000;
+const CHUNK_INTERVAL_MS = 30000; // 30s for testing — change to 180000 for production
 
 const states = {
   idle:       document.getElementById("state-idle"),
@@ -20,27 +19,35 @@ const btnDocx       = document.getElementById("btn-docx");
 const timerEl       = document.getElementById("timer");
 const processingTxt = document.getElementById("processing-text");
 
-let timerInterval  = null;
-let pollInterval   = null;
-let elapsedSeconds = 0;
-let currentSession = null;
+// ── Recording state ────────────────────────────────────────────
+let timerInterval   = null;
+let pollInterval    = null;
+let chunkInterval   = null;
+let elapsedSeconds  = 0;
+let currentSession  = null;
+let mediaRecorder   = null;
+let audioStream     = null;
+let chunkIndex      = 0;
+let speakerTimeline = [];
+let participants    = [];
+let recordingStart  = null;
+let isRecording     = false;
 
 // ── Show state ─────────────────────────────────────────────────
 function showState(name) {
-  Object.values(states).forEach((el) => el?.classList.remove("active"));
-  states[name]?.classList.add("active");
+  Object.values(states).forEach((el) => el.classList.remove("active"));
+  states[name].classList.add("active");
 }
 
 // ── Timer ──────────────────────────────────────────────────────
 function startTimer() {
   elapsedSeconds = 0;
-  if (timerEl) timerEl.textContent = "00:00:00";
-  timerInterval = setInterval(() => {
+  timerInterval  = setInterval(() => {
     elapsedSeconds++;
     const h = String(Math.floor(elapsedSeconds / 3600)).padStart(2, "0");
     const m = String(Math.floor((elapsedSeconds % 3600) / 60)).padStart(2, "0");
     const s = String(elapsedSeconds % 60).padStart(2, "0");
-    if (timerEl) timerEl.textContent = `${h}:${m}:${s}`;
+    timerEl.textContent = `${h}:${m}:${s}`;
   }, 1000);
 }
 
@@ -59,28 +66,35 @@ const processingMessages = [
 
 function startProcessingMessages() {
   processingMessages.forEach(({ delay, text }) => {
-    setTimeout(() => { if (processingTxt) processingTxt.textContent = text; }, delay);
+    setTimeout(() => {
+      if (processingTxt) processingTxt.textContent = text;
+    }, delay);
   });
 }
 
 // ── Polling ────────────────────────────────────────────────────
-function startPolling(sid) {
-  stopPolling();
+function startPolling(sessionId) {
   pollInterval = setInterval(async () => {
     try {
-      const res  = await fetch(`${BACKEND_URL}/status?session_id=${sid}`);
-      if (res.status === 404) { stopPolling(); await resetToIdle(); return; }
+      const res  = await fetch(`${BACKEND_URL}/status?session_id=${sessionId}`);
+      if (res.status === 404) {
+        stopPolling();
+        await chrome.storage.local.clear();
+        showState("idle");
+        return;
+      }
       const data = await res.json();
       if (data.status === "ready") {
         stopPolling();
-        setDocxUrl(data.docx_url);
-        await chrome.storage.local.set({ currentState: "ready", docxUrl: data.docx_url || "" });
+        if (btnDocx && data.docx_url) btnDocx.href = `${BACKEND_URL}${data.docx_url}`;
         showState("ready");
-      } else if (data.status === "failed" || data.status === "error") {
+      } else if (data.status === "failed") {
         stopPolling();
         showState("error");
       }
-    } catch (e) { console.error("Poll error:", e); }
+    } catch (err) {
+      console.error("Poll error:", err);
+    }
   }, POLL_INTERVAL);
 }
 
@@ -89,149 +103,255 @@ function stopPolling() {
   pollInterval = null;
 }
 
-function setDocxUrl(url) {
-  if (btnDocx && url) btnDocx.href = `${BACKEND_URL}${url}`;
-}
+// ── Upload chunk ───────────────────────────────────────────────
+async function uploadChunk(audioBlob, index) {
+  const formData = new FormData();
+  formData.append("audio",            audioBlob, `chunk_${index}.webm`);
+  formData.append("chunk_index",      index);
+  formData.append("session_id",       currentSession);
+  formData.append("speaker_timeline", JSON.stringify(speakerTimeline));
+  formData.append("participants",     JSON.stringify(participants));
 
-// ── Reset ──────────────────────────────────────────────────────
-async function resetToIdle() {
-  stopPolling();
-  stopTimer();
-  currentSession = null;
-  elapsedSeconds = 0;
-  if (timerEl) timerEl.textContent = "00:00:00";
-  await chrome.storage.local.clear();
-  showState("idle");
-}
-
-// ── Start Recording ────────────────────────────────────────────
-btnStart?.addEventListener("click", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-  const supported =
-    tab.url.includes("meet.google.com") ||
-    tab.url.includes("zoom.us") ||
-    tab.url.includes("teams.microsoft.com");
-
-  if (!supported) {
-    alert("Please open Google Meet, Zoom, or Teams first.");
-    return;
+  try {
+    const res = await fetch(`${BACKEND_URL}/upload-chunk`, {
+      method: "POST",
+      body:   formData,
+    });
+    if (!res.ok) console.error(`Chunk ${index} failed:`, res.status);
+    else         console.log(`Chunk ${index} uploaded — ${audioBlob.size} bytes`);
+  } catch (err) {
+    console.error(`Chunk ${index} error:`, err);
   }
+}
 
-  const res = await chrome.runtime.sendMessage({ action: "FLOATING_START", tabId: tab.id });
+// ── Finalize ───────────────────────────────────────────────────
+async function finalizeSession() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/finalize`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id:       currentSession,
+        participants:     participants,
+        speaker_timeline: speakerTimeline,
+      }),
+    });
+    if (!res.ok) console.error("Finalize failed:", res.status);
+    else         console.log("Finalize sent OK");
+  } catch (err) {
+    console.error("Finalize error:", err);
+  }
+}
 
-  if (res?.success) {
-    currentSession = res.sessionId;
+// ── Record one chunk — stop/restart creates fresh WebM header ──
+function recordChunk() {
+  if (!audioStream || !isRecording) return;
+
+  const currentIndex = chunkIndex++;
+
+  // Create a fresh MediaRecorder for each chunk
+  // This ensures every chunk has its own WebM header
+  const recorder = new MediaRecorder(audioStream, { mimeType: "audio/webm" });
+  const chunks   = [];
+
+  recorder.ondataavailable = (e) => {
+    if (e.data.size > 0) chunks.push(e.data);
+  };
+
+  recorder.onstop = async () => {
+    if (chunks.length > 0) {
+      const blob = new Blob(chunks, { type: "audio/webm" });
+      console.log(`Chunk ${currentIndex} complete — ${blob.size} bytes`);
+      await uploadChunk(blob, currentIndex);
+    }
+  };
+
+  recorder.start();
+
+  // Stop after CHUNK_INTERVAL_MS — this triggers onstop → upload
+  setTimeout(() => {
+    if (recorder.state === "recording") {
+      recorder.stop();
+    }
+  }, CHUNK_INTERVAL_MS);
+
+  // Save reference to stop manually on End Meeting
+  mediaRecorder = recorder;
+}
+
+// ── Listen for speaker updates from content.js ─────────────────
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.action === "SPEAKER_UPDATE" && recordingStart) {
+    const elapsed = Date.now() - recordingStart;
+    speakerTimeline.push({ name: msg.name, timestamp_ms: elapsed });
+  }
+  if (msg.action === "PARTICIPANTS_UPDATE") {
+    participants = msg.participants;
+  }
+});
+
+// ── Button: Start Recording ────────────────────────────────────
+btnStart.addEventListener("click", async () => {
+
+  currentSession  = crypto.randomUUID();
+  chunkIndex      = 0;
+  speakerTimeline = [];
+  participants    = [];
+  recordingStart  = null;
+  isRecording     = true;
+
+  try {
+    // Get display media — user selects Meet tab + checks "Share tab audio"
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: true,
+    });
+
+    const audioTrack = displayStream.getAudioTracks()[0];
+    const videoTrack = displayStream.getVideoTracks()[0];
+
+    if (videoTrack) videoTrack.stop();
+
+    if (!audioTrack) {
+      alert(
+        "No audio captured.\n\n" +
+        "When the screen share picker appears:\n" +
+        "1. Click 'Chrome Tab'\n" +
+        "2. Select your Google Meet tab\n" +
+        "3. Tick 'Share tab audio'\n" +
+        "4. Click Share"
+      );
+      isRecording = false;
+      return;
+    }
+
+    console.log("Audio track:", audioTrack.label);
+    audioStream    = new MediaStream([audioTrack]);
+    recordingStart = Date.now();
+
+    // Auto-stop when user clicks "Stop sharing" in browser
+    audioTrack.onended = () => {
+      console.log("Tab sharing ended");
+      if (isRecording) btnStop.click();
+    };
+
+    // Start first chunk immediately
+    recordChunk();
+
+    // Start new chunk every CHUNK_INTERVAL_MS
+    chunkInterval = setInterval(() => {
+      if (isRecording) recordChunk();
+    }, CHUNK_INTERVAL_MS);
+
+    await chrome.storage.local.set({
+      currentSession: currentSession,
+      currentState:   "recording",
+    });
+
     showState("recording");
     startTimer();
-  } else {
-    alert("Could not start: " + (res?.error || "unknown"));
+    console.log("Recording started. Session:", currentSession);
+
+  } catch (err) {
+    isRecording = false;
+    console.error("Start error:", err);
+    if (err.name === "NotAllowedError") {
+      alert("Screen sharing was cancelled. Please try again.");
+    } else {
+      alert("Could not start: " + err.message);
+    }
   }
 });
 
-// ── Stop Recording ─────────────────────────────────────────────
-btnStop?.addEventListener("click", async () => {
+// ── Button: End Meeting ────────────────────────────────────────
+btnStop.addEventListener("click", async () => {
+  isRecording = false;
   stopTimer();
+
+  // Stop chunk interval
+  clearInterval(chunkInterval);
+  chunkInterval = null;
+
+  // Stop current recorder — triggers final chunk upload
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+    await new Promise(r => setTimeout(r, 500)); // wait for final chunk
+  }
+
+  // Stop audio stream
+  if (audioStream) {
+    audioStream.getTracks().forEach(t => t.stop());
+    audioStream = null;
+  }
+
   showState("processing");
   startProcessingMessages();
-
-  // Get session BEFORE sending stop message
-  const stored = await chrome.storage.local.get("currentSession");
-  currentSession = stored.currentSession || currentSession;
-
-  chrome.runtime.sendMessage({ action: "FLOATING_STOP" });
-
-  await chrome.storage.local.set({ currentState: "processing", processingStarted: Date.now() });
-
-  if (currentSession) {
-    console.log("Polling for session:", currentSession);
-    startPolling(currentSession);
-  } else {
-    console.error("No session ID found — cannot poll");
-  }
+  await chrome.storage.local.clear();
+  await finalizeSession();
+  if (currentSession) startPolling(currentSession);
 });
 
-// ── Retry ──────────────────────────────────────────────────────
-btnRetry?.addEventListener("click", async () => {
+// ── Button: Retry ─────────────────────────────────────────────
+btnRetry.addEventListener("click", async () => {
   if (!currentSession) return;
   showState("processing");
   startProcessingMessages();
   try {
-    const res = await fetch(`${BACKEND_URL}/finalize`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: currentSession }),
+    await fetch(`${BACKEND_URL}/finalize`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ session_id: currentSession }),
     });
-    if (res.ok) startPolling(currentSession); else showState("error");
-  } catch { showState("error"); }
+    startPolling(currentSession);
+  } catch (err) {
+    showState("error");
+  }
 });
 
-// ── New / Reset ────────────────────────────────────────────────
-btnNew?.addEventListener("click", resetToIdle);
-btnNewError?.addEventListener("click", resetToIdle);
-
-// ── Storage listener ───────────────────────────────────────────
-chrome.storage.onChanged.addListener(async (changes, area) => {
-  if (area !== "local") return;
-  const newState   = changes.currentState?.newValue;
-  const newSession = changes.currentSession?.newValue;
-
-  if (newSession) currentSession = newSession;
-
-  if (newState === "recording") {
-    stopPolling(); stopTimer();
-    showState("recording"); startTimer();
+// ── Button: New Recording ──────────────────────────────────────
+async function resetToIdle() {
+  isRecording = false;
+  stopPolling();
+  stopTimer();
+  clearInterval(chunkInterval);
+  chunkInterval = null;
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
   }
-  if (newState === "processing") {
-    stopTimer(); showState("processing"); startProcessingMessages();
-    if (currentSession) startPolling(currentSession);
+  if (audioStream) {
+    audioStream.getTracks().forEach(t => t.stop());
+    audioStream = null;
   }
-  if (newState === "ready") {
-    stopTimer(); stopPolling();
-    const docx = changes.docxUrl?.newValue;
-    if (docx) setDocxUrl(docx);
-    else { const s = await chrome.storage.local.get("docxUrl"); setDocxUrl(s.docxUrl); }
-    showState("ready");
-  }
-  if (newState === "error") { stopTimer(); stopPolling(); showState("error"); }
-});
+  currentSession = null;
+  elapsedSeconds = 0;
+  timerEl.textContent = "00:00:00";
+  await chrome.storage.local.clear();
+  showState("idle");
+}
+
+btnNew.addEventListener("click", resetToIdle);
+btnNewError.addEventListener("click", resetToIdle);
 
 // ── Init ───────────────────────────────────────────────────────
 (async () => {
-  const stored = await chrome.storage.local.get([
-    "currentSession", "currentState", "processingStarted", "docxUrl"
-  ]);
-  const { currentSession: sid, currentState: state, docxUrl } = stored;
-
-  if (!sid || !state || state === "idle") { showState("idle"); return; }
-
-  currentSession = sid;
-
-  if (state === "recording") { showState("recording"); startTimer(); return; }
-
-  if (state === "ready") {
+  const stored = await chrome.storage.local.get(["currentSession", "currentState"]);
+  if (stored.currentSession && stored.currentState === "recording") {
     try {
-      const res  = await fetch(`${BACKEND_URL}/status?session_id=${sid}`);
-      if (res.status === 404) { await chrome.storage.local.clear(); showState("idle"); return; }
-      const data = await res.json();
-      if (data.status === "ready") { setDocxUrl(data.docx_url || docxUrl); showState("ready"); return; }
-    } catch { await chrome.storage.local.clear(); showState("idle"); return; }
-  }
-
-  if (state === "processing") {
-    try {
-      const res  = await fetch(`${BACKEND_URL}/status?session_id=${sid}`);
-      if (res.status === 404) { await chrome.storage.local.clear(); showState("idle"); return; }
-      const data = await res.json();
-      if (data.status === "ready")  { setDocxUrl(data.docx_url); showState("ready"); return; }
-      if (data.status === "failed") { showState("error"); return; }
-      if (Date.now() - (stored.processingStarted || 0) > 5 * 60 * 1000) {
-        await chrome.storage.local.clear(); showState("idle"); return;
+      const res = await fetch(`${BACKEND_URL}/status?session_id=${stored.currentSession}`);
+      if (res.status === 404) {
+        await chrome.storage.local.clear();
+        showState("idle");
+        return;
       }
-      showState("processing"); startProcessingMessages(); startPolling(sid);
-    } catch { await chrome.storage.local.clear(); showState("idle"); }
-    return;
+      currentSession = stored.currentSession;
+      showState("recording");
+      startTimer();
+    } catch (e) {
+      await chrome.storage.local.clear();
+      showState("idle");
+    }
+  } else {
+    await chrome.storage.local.clear();
+    showState("idle");
   }
-
-  if (state === "error") { showState("error"); return; }
-  showState("idle");
 })();
