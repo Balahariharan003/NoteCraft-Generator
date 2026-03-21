@@ -76,10 +76,22 @@ class ActionItem(BaseModel):
 
 
 class MoMOutput(BaseModel):
-    title:        str
-    date:         str
-    participants: List[str]
-    agenda:       List[str]
-    discussions:  List[str]
-    decisions:    List[str]
-    action_items: List[ActionItem]
+    title:           str
+    date:            str
+    time:            Optional[str] = "Not specified"
+    mode_of_meeting: str = "Online (Google Meet)"
+    prepared_by:     str = "MoM Generator"
+    participants:    List[str]
+    agenda:          List[str]
+    key_discussions: List[str]
+    decisions_taken: List[str]
+    action_items:    List[ActionItem]
+
+    # Keep backward compatibility — old fields map to new ones
+    @property
+    def discussions(self):
+        return self.key_discussions
+
+    @property
+    def decisions(self):
+        return self.decisions_taken

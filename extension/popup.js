@@ -1,6 +1,6 @@
 const BACKEND_URL       = "http://localhost:8000";
 const POLL_INTERVAL     = 2000;
-const CHUNK_INTERVAL_MS = 30000; // 30s for testing — change to 180000 for production
+const CHUNK_INTERVAL_MS = 30000; // 30s for testing
 
 const states = {
   idle:       document.getElementById("state-idle"),

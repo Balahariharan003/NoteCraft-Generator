@@ -52,13 +52,8 @@ async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 1500
 
 # ── Parse JSON safely from LLM output ─────────────────────────
 def _parse_json(raw: str) -> dict | None:
-    """
-    Extracts and parses JSON from LLM response.
-    Handles cases where LLM wraps JSON in markdown code blocks.
-    """
     if not raw:
         return None
-    # Strip markdown code fences if present
     clean = raw.strip()
     if clean.startswith("```"):
         lines = clean.split("\n")
@@ -67,7 +62,6 @@ def _parse_json(raw: str) -> dict | None:
         return json.loads(clean)
     except json.JSONDecodeError:
         pass
-    # Try extracting JSON object from mixed text
     try:
         start = clean.index("{")
         end   = clean.rindex("}") + 1
@@ -78,18 +72,11 @@ def _parse_json(raw: str) -> dict | None:
 
 # ── Validate and fix MoM JSON structure ───────────────────────
 def _validate_mom(mom: dict, participants: list, date: str) -> dict:
-    """
-    Ensures all fields are correct types.
-    Fixes the character-by-character bug — if a field is a string
-    instead of a list, wrap it in a list instead of iterating chars.
-    """
     def to_list(val, fallback: list) -> list:
         if isinstance(val, list):
-            # Filter out empty strings and single characters
             cleaned = [str(v).strip() for v in val if str(v).strip() and len(str(v).strip()) > 1]
             return cleaned if cleaned else fallback
         if isinstance(val, str) and len(val) > 1:
-            # LLM returned a string instead of list — wrap it
             return [val]
         return fallback
 
@@ -107,13 +94,26 @@ def _validate_mom(mom: dict, participants: list, date: str) -> dict:
         return result
 
     return {
-        "title":        str(mom.get("title", "Minutes of Meeting")),
-        "date":         str(mom.get("date", date)),
-        "participants": to_list(mom.get("participants", participants), participants or ["Participants not identified"]),
-        "agenda":       to_list(mom.get("agenda", []),       ["Agenda not specified"]),
-        "discussions":  to_list(mom.get("discussions", []),  ["No discussions recorded"]),
-        "decisions":    to_list(mom.get("decisions", []),    ["No decisions recorded"]),
-        "action_items": to_action_items(mom.get("action_items", [])),
+        "title":           str(mom.get("title", "Minutes of Meeting")),
+        "date":            str(mom.get("date", date)),
+        "time":            str(mom.get("time", "Not specified")),
+        "mode_of_meeting": "Online (Google Meet)",
+        "prepared_by":     "MoM Generator",
+        "participants":    to_list(
+                               mom.get("participants", participants),
+                               participants or ["Participants not identified"]),
+        "agenda":          to_list(
+                               mom.get("agenda", []),
+                               ["Agenda not specified"]),
+        "key_discussions": to_list(
+                               mom.get("key_discussions",
+                               mom.get("discussions", [])),
+                               ["No discussions recorded"]),
+        "decisions_taken": to_list(
+                               mom.get("decisions_taken",
+                               mom.get("decisions", [])),
+                               ["No decisions recorded"]),
+        "action_items":    to_action_items(mom.get("action_items", [])),
     }
 
 
@@ -131,11 +131,11 @@ async def clean_transcript(raw_transcript: str) -> str:
     return cleaned if cleaned else raw_transcript
 
 
-# ── JOB 2: Segment summary ────────────────────────────────────
+# ── JOB 2: Segment summary ─────────────────────────────────────
 async def summarise_chunk(
     clean_transcript: str,
-    prev_summary: str = "",
-    chunk_index: int  = 0,
+    prev_summary:     str = "",
+    chunk_index:      int = 0,
 ) -> str:
     system = (
         "You are a meeting assistant. "
@@ -143,12 +143,15 @@ async def summarise_chunk(
         "Focus on: key discussion points, decisions made, and action items mentioned. "
         "Be concise. Each bullet should be one clear sentence."
     )
-    context = f"Context from previous segment:\n{prev_summary}\n\n" if prev_summary and chunk_index > 0 else ""
-    user    = f"{context}Summarise this meeting segment (segment {chunk_index + 1}):\n\n{clean_transcript}"
+    context = (
+        f"Context from previous segment:\n{prev_summary}\n\n"
+        if prev_summary and chunk_index > 0 else ""
+    )
+    user = f"{context}Summarise this meeting segment (segment {chunk_index + 1}):\n\n{clean_transcript}"
     return await _call_llm(system, user)
 
 
-# ── JOB 3a: Block aggregation ─────────────────────────────────
+# ── JOB 3a: Block aggregation ──────────────────────────────────
 async def aggregate_block(chunk_summaries: list, block_index: int) -> str:
     system = (
         "You are a meeting assistant. "
@@ -157,8 +160,10 @@ async def aggregate_block(chunk_summaries: list, block_index: int) -> str:
         "Remove redundancy. Extract any clear decisions made. "
         "Return a clean paragraph-style summary in 4 to 6 sentences."
     )
-    summaries_text = "\n\n".join([f"Segment {i+1}:\n{s}" for i, s in enumerate(chunk_summaries)])
-    user           = f"Merge these segment summaries into one block summary (block {block_index + 1}):\n\n{summaries_text}"
+    summaries_text = "\n\n".join(
+        [f"Segment {i+1}:\n{s}" for i, s in enumerate(chunk_summaries)]
+    )
+    user = f"Merge these segment summaries into one block summary (block {block_index + 1}):\n\n{summaries_text}"
     return await _call_llm(system, user)
 
 
@@ -173,17 +178,20 @@ async def generate_mom(
         "Generate a structured Minutes of Meeting (MoM) from the given meeting summaries. "
         "Return ONLY valid JSON — no markdown, no code blocks, no extra text. "
         "The JSON must have exactly these keys:\n"
-        "  title        → string: descriptive meeting title\n"
-        "  date         → string: meeting date\n"
-        "  participants → array of strings: participant names\n"
-        "  agenda       → array of strings: each agenda item is a full sentence\n"
-        "  discussions  → array of strings: each discussion point is a full sentence (NOT individual characters)\n"
-        "  decisions    → array of strings: each decision is a full sentence\n"
-        "  action_items → array of objects with keys: owner (string), task (string), deadline (string)\n"
-        "IMPORTANT: Every array must contain complete sentences or phrases, never single characters or letters."
+        "  title           → string: descriptive meeting title\n"
+        "  date            → string: meeting date\n"
+        "  time            → string: meeting time or 'Not specified'\n"
+        "  participants    → array of strings: participant names\n"
+        "  agenda          → array of strings: each agenda item as a full sentence\n"
+        "  key_discussions → array of strings: each discussion point as a full sentence\n"
+        "  decisions_taken → array of strings: each decision as a full sentence\n"
+        "  action_items    → array of objects with keys: owner, task, deadline\n"
+        "IMPORTANT: Every array must contain complete sentences, never single characters."
     )
 
-    summaries_text = "\n\n".join([f"Block {i+1}:\n{s}" for i, s in enumerate(block_summaries)])
+    summaries_text = "\n\n".join(
+        [f"Block {i+1}:\n{s}" for i, s in enumerate(block_summaries)]
+    )
     user = (
         f"Meeting date: {meeting_date}\n"
         f"Participants: {', '.join(participants) if participants else 'Unknown'}\n\n"
@@ -191,8 +199,8 @@ async def generate_mom(
         f"Generate the MoM JSON now. Remember: arrays must contain full sentences, not characters."
     )
 
-    raw     = await _call_llm(system, user, max_tokens=2000)
-    parsed  = _parse_json(raw)
+    raw    = await _call_llm(system, user, max_tokens=2000)
+    parsed = _parse_json(raw)
 
     if parsed:
         return _validate_mom(parsed, participants, meeting_date)
@@ -220,17 +228,20 @@ async def refine_mom(mom_json: dict) -> dict:
             mom_json.get("participants", []),
             mom_json.get("date", ""),
         )
-    return mom_json  # fallback to original
+    return mom_json
 
 
 # ── Fallback MoM ──────────────────────────────────────────────
 def _fallback_mom(participants: list, date: str) -> dict:
     return {
-        "title":        "Minutes of Meeting",
-        "date":         date,
-        "participants": participants or ["Participants not identified"],
-        "agenda":       ["Agenda could not be extracted"],
-        "discussions":  ["Discussions could not be extracted"],
-        "decisions":    ["Decisions could not be extracted"],
-        "action_items": [],
+        "title":           "Minutes of Meeting",
+        "date":            date,
+        "time":            "Not specified",
+        "mode_of_meeting": "Online (Google Meet)",
+        "prepared_by":     "MoM Generator",
+        "participants":    participants or ["Participants not identified"],
+        "agenda":          ["Agenda could not be extracted"],
+        "key_discussions": ["Discussions could not be extracted"],
+        "decisions_taken": ["Decisions could not be extracted"],
+        "action_items":    [],
     }
