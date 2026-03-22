@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "MoM Generator",
+  "name": "NoteCraft Generator",
   "version": "1.0",
-  "description": "Automatically generate Minutes of Meeting from Google Meet / Zoom",
+  "description": "Automatically generate Notes from Google Meet / Zoom",
 
   "permissions": [
     "activeTab",
@@ -25,7 +25,7 @@
 
   "action": {
     "default_popup": "popup.html",
-    "default_title": "MoM Generator"
+    "default_title": "NoteCraft Generator"
   },
 
   "content_scripts": [
