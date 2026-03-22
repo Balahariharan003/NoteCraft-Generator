@@ -69,7 +69,7 @@ async def run_pipeline(session_id: str):
         1. Retry failed chunks
         2. Speaker mapping
         3. MAP-REDUCE aggregation
-        4. Final MoM generation
+        4. Final Notes generation
         5. Refinement pass
         6. Export PDF + DOCX
     """
@@ -94,7 +94,7 @@ async def run_pipeline(session_id: str):
         save_block_summaries(session_id, block_summaries)
 
         # ── Step 4: Generate final MoM JSON ───────────────────
-        print("Generating final MoM...")
+        print("Generating final Notes...")
         participants = session.get("participants", [])
         meeting_date = datetime.now().strftime("%Y-%m-%d")
 

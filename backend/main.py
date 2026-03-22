@@ -5,7 +5,7 @@ import os
 
 from routers import chunks, finalize, status
 
-app = FastAPI(title="MoM Generator API", version="1.0.0")
+app = FastAPI(title="Notes Generator API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,4 +24,4 @@ app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
 
 @app.get("/")
 async def root():
-    return {"status": "MoM Generator API is running"}
+    return {"status": "Notes Generator API is running"}

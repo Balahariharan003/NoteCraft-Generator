@@ -60,7 +60,7 @@ function stopTimer() {
 const processingMessages = [
   { delay: 0,     text: "Processing meeting..."  },
   { delay: 10000, text: "Mapping speakers..."    },
-  { delay: 25000, text: "Generating MoM..."      },
+  { delay: 25000, text: "Generating Notes..."      },
   { delay: 60000, text: "Preparing download..."  },
 ];
 

@@ -7,7 +7,6 @@ class SpeakerEvent(BaseModel):
     name: str
     timestamp_ms: int
 
-    # Tolerate floats from JS (e.g. 12345.0 → 12345)
     @field_validator("timestamp_ms", mode="before")
     @classmethod
     def coerce_to_int(cls, v):
@@ -27,7 +26,6 @@ class FinalizeRequest(BaseModel):
     participants:     List[str] = []
     speaker_timeline: List[SpeakerEvent] = []
 
-    # Tolerate speaker_timeline accidentally sent as JSON string
     @field_validator("speaker_timeline", mode="before")
     @classmethod
     def parse_timeline_string(cls, v):
@@ -39,7 +37,6 @@ class FinalizeRequest(BaseModel):
                 return []
         return v
 
-    # Tolerate participants accidentally sent as JSON string
     @field_validator("participants", mode="before")
     @classmethod
     def parse_participants_string(cls, v):
@@ -55,43 +52,74 @@ class FinalizeRequest(BaseModel):
 # ── /status ────────────────────────────────────────────────────
 class StatusResponse(BaseModel):
     session_id: str
-    status:     str            # "processing" | "ready" | "failed"
+    status:     str
     pdf_url:    Optional[str] = None
     docx_url:   Optional[str] = None
 
 
-# ── Internal chunk data stored in session ──────────────────────
+# ── Internal chunk data ────────────────────────────────────────
 class ChunkData(BaseModel):
     raw:     str = ""
     clean:   str = ""
     summary: str = ""
-    status:  str = "pending"   # "pending" | "ok" | "failed"
+    status:  str = "pending"
 
 
-# ── Final MoM JSON structure ───────────────────────────────────
-class ActionItem(BaseModel):
-    owner:    str
-    task:     str
-    deadline: Optional[str] = None
+# ── Example / Problem solved in class ─────────────────────────
+class Example(BaseModel):
+    question:       Optional[str] = None
+    solution_steps: Optional[str] = None
+    final_answer:   Optional[str] = None
 
 
-class MoMOutput(BaseModel):
-    title:           str
-    date:            str
-    time:            Optional[str] = "Not specified"
-    mode_of_meeting: str = "Online (Google Meet)"
-    prepared_by:     str = "MoM Generator"
-    participants:    List[str]
-    agenda:          List[str]
-    key_discussions: List[str]
-    decisions_taken: List[str]
-    action_items:    List[ActionItem]
+# ── Topic covered in class ─────────────────────────────────────
+class Topic(BaseModel):
+    name:            str
+    explanation:     Optional[str] = None
+    key_points:      Optional[List[str]] = None
+    examples:        Optional[List[str]] = None
+    important_notes: Optional[str] = None
 
-    # Keep backward compatibility — old fields map to new ones
-    @property
-    def discussions(self):
-        return self.key_discussions
 
-    @property
-    def decisions(self):
-        return self.decisions_taken
+# ── Concept explained in class ─────────────────────────────────
+class Concept(BaseModel):
+    name:         str
+    definition:   Optional[str] = None
+    explanation:  Optional[str] = None
+    real_example: Optional[str] = None
+
+
+# ── Q&A during session ─────────────────────────────────────────
+class QnA(BaseModel):
+    question: str
+    answer:   str
+
+
+# ── Class Notes Output — all fields optional ──────────────────
+# Only fields with actual content will appear in the DOCX
+class ClassNotesOutput(BaseModel):
+    # Session details
+    course_name:        Optional[str] = None
+    subject_topic:      Optional[str] = None
+    session_title:      Optional[str] = None
+    date:               Optional[str] = None
+    time:               Optional[str] = None
+    platform:           str = "Google Meet"
+    instructor_name:    Optional[str] = None
+
+    # Content sections — all optional
+    session_overview:       Optional[List[str]] = None
+    learning_objectives:    Optional[List[str]] = None
+    topics_covered:         Optional[List[Topic]] = None
+    concepts:               Optional[List[Concept]] = None
+    examples:               Optional[List[Example]] = None
+    key_takeaways:          Optional[List[str]] = None
+    formulas_definitions:   Optional[List[str]] = None
+    questions_answers:      Optional[List[QnA]] = None
+    assignments:            Optional[List[str]] = None
+    study_resources:        Optional[List[str]] = None
+    additional_notes:       Optional[List[str]] = None
+    revision_summary:       Optional[List[str]] = None
+
+    # Metadata
+    prepared_by: str = "Notes Generator"

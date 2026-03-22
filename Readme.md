@@ -1,19 +1,20 @@
-# MoM Generator
+# NoteCraft Generator
 
-Automatically generate **Minutes of Meeting** from Google Meet, Zoom, or Microsoft Teams using a Chrome Extension and an AI-powered Python backend.
+Automatically generate **Smart Class Notes** and **Minutes of Meeting** from Google Meet, Zoom, or Microsoft Teams using a Chrome Extension and an AI-powered Python backend.
 
 ---
 
 ## What it does
 
-- Records your online meeting audio live via a Chrome extension
+- Records your online class or meeting audio live via a Chrome extension
 - Captures participant names and active speaker timeline from the meeting DOM
 - Transcribes audio using **Sarvam AI (Saaras v2.5)**
-- Cleans, summarises, and generates a structured MoM using **Sarvam-M LLM**
-- Exports a professional **PDF** and **DOCX** document
+- Cleans, summarises, and generates structured notes using **Sarvam-M LLM**
+- Exports professional **DOCX** documents — class notes or meeting minutes
+- Sections appear **only if content exists** — no empty headings ever
 - Deletes all data after download — privacy first
 
-
+-
 ## Tech Stack
 
 | Layer | Technology |
@@ -22,7 +23,6 @@ Automatically generate **Minutes of Meeting** from Google Meet, Zoom, or Microso
 | Backend | Python, FastAPI |
 | Speech-to-Text | Sarvam Saaras v2.5 |
 | LLM | Sarvam-M |
-| PDF Export | fpdf2 |
 | DOCX Export | python-docx |
 
 ---
@@ -30,14 +30,15 @@ Automatically generate **Minutes of Meeting** from Google Meet, Zoom, or Microso
 ## Project Structure
 
 ```
-mom-generator/
+notecraft-generator/
 ├── .gitignore
+├── README.md
 ├── extension/
 │   ├── manifest.json       # Chrome extension config + permissions
-│   ├── background.js       # Audio capture + chunk upload
+│   ├── background.js       # Message relay service worker
 │   ├── content.js          # DOM scraping — names + active speaker
 │   ├── popup.html          # Extension UI — 5 states
-│   ├── popup.js            # UI logic + backend polling
+│   ├── popup.js            # UI logic + audio capture + backend polling
 │   └── popup.css           # Popup styles
 │
 └── backend/
@@ -52,10 +53,10 @@ mom-generator/
     │   ├── finalize.py     # POST /finalize
     │   └── status.py       # GET /status
     ├── services/
-    │   ├── sarvam_stt.py   # Sarvam STT per chunk
-    │   ├── sarvam_llm.py   # Clean + summarise + generate MoM
+    │   ├── sarvam_stt.py   # Sarvam STT — audio to transcript
+    │   ├── sarvam_llm.py   # Clean + summarise + generate notes
     │   ├── speaker_map.py  # Assign real names to transcript
-    │   └── export.py       # JSON → PDF + DOCX
+    │   └── export.py       # JSON → DOCX (conditional sections)
     └── outputs/            # Generated files (auto-deleted after download)
 ```
 
@@ -65,14 +66,19 @@ mom-generator/
 
 - Python 3.11 or higher
 - Google Chrome browser
+- ffmpeg installed and added to PATH
 - Sarvam AI API key — sign up at [sarvam.ai](https://sarvam.ai)
 
 ---
 
 ## Setup — Step by Step
 
-### 1. Clone or create the project
+### 1. Clone the project
 
+```bash
+git clone https://github.com/Balahariharan003/NoteCraft-Generator.git
+cd notecraft-generator
+```
 
 ### 2. Install Python dependencies
 
@@ -88,100 +94,144 @@ uvicorn
 python-dotenv
 httpx
 python-multipart
-fpdf2
 python-docx
 ```
 
-### 3. Add your Sarvam API key
+### 3. Install ffmpeg (required for audio processing)
+
+**Windows:**
+```
+Download from https://ffmpeg.org/download.html
+Add to PATH environment variable
+```
+
+Verify:
+```bash
+ffmpeg -version
+```
+
+### 4. Add your Sarvam API key
 
 Create `backend/.env`:
+```
 SARVAM_API_KEY=your_sarvam_api_key_here
 ```
 
 Get your key from the [Sarvam AI dashboard](https://sarvam.ai) after signing up. Free credits are given on signup.
 
-### 4. Start the backend server
+### 5. Start the backend server
 
 ```bash
 cd backend
 uvicorn main:app --reload --port 8000
 ```
 
-Open `http://localhost:8000` — you should see:
-```json
-{ "status": "MoM Generator API is running" }
+You should see:
+```
+INFO: Application startup complete.
 ```
 
-Open `http://localhost:8000/docs` to see all API endpoints.
-
-### 5. Load the Chrome extension
+### 6. Load the Chrome extension
 
 1. Open Chrome and go to `chrome://extensions`
 2. Enable **Developer Mode** (top right toggle)
 3. Click **Load unpacked**
 4. Select the `extension/` folder
 
-The MoM Generator icon will appear in your Chrome toolbar.
+The **NoteCraft Generator** icon will appear in your Chrome toolbar.
 
 ---
 
 ## How to Use
 
 1. Open **Google Meet**, **Zoom**, or **Microsoft Teams** in Chrome
-2. Click the **MoM Generator** extension icon
-3. Click **Start Recording** — the extension starts capturing audio and speaker data
-4. Conduct your meeting normally
-5. Click **End Meeting** when done
-6. Wait ~55–90 seconds while the MoM is generated
-7. Click **Download PDF** or **Download DOCX**
-8. All data is automatically deleted after download
+2. Click the **NoteCraft Generator** extension icon
+3. Click **Start Recording**
+4. Chrome shows a screen share picker:
+   - Select **Chrome Tab**
+   - Choose your **Meet tab**
+   - Tick **"Share tab audio"**
+   - Click **Share**
+5. Conduct your class or meeting normally
+6. Click **End Meeting** when done
+7. Wait ~60–90 seconds while notes are generated
+8. Click **Download DOCX**
+9. All data is automatically deleted after download
 
 ---
 
 ## How It Works — Pipeline
 
 ```
-Meeting audio (every 3 min)
+Class/Meeting audio (every 30 seconds)
         ↓
-POST /upload-chunk  →  Sarvam STT  →  transcript cleaning  →  segment summary
+POST /upload-chunk
+        ↓
+ffmpeg converts WebM → WAV (splits if > 25 seconds)
+        ↓
+Sarvam Saaras v2.5 → transcript per segment
+        ↓
+Sarvam-M → clean transcript → segment summary
         ↓
 User clicks End Meeting
         ↓
 POST /finalize
         ↓
-Speaker mapping  (DOM timeline + transcript timestamps)
+MAP-REDUCE aggregation (Sarvam-M)
+5 chunk summaries → 1 block summary
         ↓
-MAP-REDUCE aggregation  (Sarvam-M)
+Final notes generation → structured JSON (Sarvam-M)
         ↓
-Final MoM generation  →  structured JSON  (Sarvam-M)
+Refinement pass (Sarvam-M)
         ↓
-Refinement pass  (Sarvam-M — accurate mode)
-        ↓
-PDF + DOCX export
+Conditional DOCX export
+Only sections with content appear
         ↓
 Download → Auto delete all temp data
 ```
 
 ---
 
-## MoM Output Structure
+## Output Structure
 
-The generated document includes:
+### Class Notes DOCX includes (only if discussed):
 
-- **Title** — meeting title
-- **Date** — meeting date
-- **Participants** — attendee names (from DOM)
-- **Agenda** — topics discussed
-- **Key Discussions** — what was talked about with speaker names
-- **Decisions** — decisions made during the meeting
-- **Action Items** — owner, task, and deadline for each item
+| Section | Content |
+|---|---|
+| Session Details | Date, time, platform, instructor |
+| Session Overview | Brief summary |
+| Learning Objectives | What students should learn |
+| Topics Covered | Each topic with explanation and key points |
+| Detailed Concepts | Definition, explanation, real examples |
+| Examples Solved | Question, solution steps, answer |
+| Key Takeaways | Most important points |
+| Formulas & Definitions | Quick reference |
+| Q&A | Student questions and answers |
+| Assignments | Homework given |
+| Study Resources | Books, links, slides |
+| Additional Notes | Tips, common mistakes |
+| Revision Summary | Ultra-short recall points |
 
 ---
 
+
 ## Built With
 
-- [Sarvam AI](https://sarvam.ai) — STT and LLM
+- [Sarvam AI](https://sarvam.ai) — STT and LLM (Indian language support)
 - [FastAPI](https://fastapi.tiangolo.com) — Python web framework
-- [fpdf2](https://py-pdf.github.io/fpdf2) — PDF generation
 - [python-docx](https://python-docx.readthedocs.io) — DOCX generation
+- [ffmpeg](https://ffmpeg.org) — Audio processing
 - Chrome Extensions API (Manifest V3)
+
+---
+
+## .gitignore
+
+```
+backend/.env
+__pycache__/
+*.pyc
+.venv/
+backend/outputs/
+.DS_Store
+```
