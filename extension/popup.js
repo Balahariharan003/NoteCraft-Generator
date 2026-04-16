@@ -27,6 +27,8 @@ let elapsedSeconds  = 0;
 let currentSession  = null;
 let mediaRecorder   = null;
 let audioStream     = null;
+let micStream       = null;   // ← microphone stream
+let audioContext    = null;   // ← AudioContext for mixing
 let chunkIndex      = 0;
 let speakerTimeline = [];
 let participants    = [];
@@ -58,10 +60,10 @@ function stopTimer() {
 
 // ── Processing messages ────────────────────────────────────────
 const processingMessages = [
-  { delay: 0,     text: "Processing meeting..."  },
-  { delay: 10000, text: "Mapping speakers..."    },
-  { delay: 25000, text: "Generating Notes..."      },
-  { delay: 60000, text: "Preparing download..."  },
+  { delay: 0,     text: "Analyzing meeting audio..."  },
+  { delay: 10000, text: "Mapping speaker voices..."   },
+  { delay: 25000, text: "Synthesizing AI insights..."  },
+  { delay: 60000, text: "Orchestrating final notes..." },
 ];
 
 function startProcessingMessages() {
@@ -86,8 +88,12 @@ function startPolling(sessionId) {
       const data = await res.json();
       if (data.status === "ready") {
         stopPolling();
-        if (btnDocx && data.docx_url) btnDocx.href = `${BACKEND_URL}${data.docx_url}`;
+        // Open the ready state in a persistent new tab instead of the popup
+        // so the user can click anywhere without it closing
+        const docxUrl = data.docx_url ? `${BACKEND_URL}${data.docx_url}` : "";
+        // Show ready state in popup too (for reference)
         showState("ready");
+        if (btnDocx && docxUrl) btnDocx.href = docxUrl;
       } else if (data.status === "failed") {
         stopPolling();
         showState("error");
@@ -201,20 +207,20 @@ btnStart.addEventListener("click", async () => {
   isRecording     = true;
 
   try {
-    // Get display media — user selects Meet tab + checks "Share tab audio"
+    // Step 1: Capture tab audio (user must tick "Share tab audio")
     const displayStream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
       audio: true,
     });
 
-    const audioTrack = displayStream.getAudioTracks()[0];
-    const videoTrack = displayStream.getVideoTracks()[0];
+    const tabAudioTrack = displayStream.getAudioTracks()[0];
+    const videoTrack    = displayStream.getVideoTracks()[0];
 
-    if (videoTrack) videoTrack.stop();
+    if (videoTrack) videoTrack.stop(); // we only need audio
 
-    if (!audioTrack) {
+    if (!tabAudioTrack) {
       alert(
-        "No audio captured.\n\n" +
+        "No tab audio captured.\n\n" +
         "When the screen share picker appears:\n" +
         "1. Click 'Chrome Tab'\n" +
         "2. Select your Google Meet tab\n" +
@@ -225,12 +231,50 @@ btnStart.addEventListener("click", async () => {
       return;
     }
 
-    console.log("Audio track:", audioTrack.label);
-    audioStream    = new MediaStream([audioTrack]);
+    // Step 2: Capture microphone audio
+    // Disable echo cancellation, noise suppression, and auto gain control
+    // so Chrome doesn't suppress the user's voice when tab audio is present
+    let micAudioTrack = null;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+        video: false,
+      });
+      micAudioTrack = micStream.getAudioTracks()[0];
+      console.log("Microphone track:", micAudioTrack.label);
+    } catch (micErr) {
+      console.warn("Microphone not available, recording tab audio only:", micErr.message);
+    }
+
+    // Step 3: Mix tab audio + microphone using Web Audio API
+    audioContext = new AudioContext();
+    const destination = audioContext.createMediaStreamDestination();
+
+    // Connect tab audio source
+    const tabSource = audioContext.createMediaStreamSource(new MediaStream([tabAudioTrack]));
+    tabSource.connect(destination);
+
+    // Connect microphone source (if available) with gain boost
+    if (micAudioTrack) {
+      const micSource = audioContext.createMediaStreamSource(new MediaStream([micAudioTrack]));
+      const micGain   = audioContext.createGain();
+      micGain.gain.value = 1.5; // Boost mic volume to ensure voice is captured
+      micSource.connect(micGain);
+      micGain.connect(destination);
+    }
+
+    // Use the mixed stream for recording
+    audioStream    = destination.stream;
     recordingStart = Date.now();
 
+    console.log("Tab audio track:", tabAudioTrack.label);
+
     // Auto-stop when user clicks "Stop sharing" in browser
-    audioTrack.onended = () => {
+    tabAudioTrack.onended = () => {
       console.log("Tab sharing ended");
       if (isRecording) btnStop.click();
     };
@@ -278,17 +322,32 @@ btnStop.addEventListener("click", async () => {
     await new Promise(r => setTimeout(r, 500)); // wait for final chunk
   }
 
-  // Stop audio stream
+  // Stop audio stream tracks
   if (audioStream) {
     audioStream.getTracks().forEach(t => t.stop());
     audioStream = null;
+  }
+
+  // Stop microphone stream
+  if (micStream) {
+    micStream.getTracks().forEach(t => t.stop());
+    micStream = null;
+  }
+
+  // Close AudioContext
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
   }
 
   showState("processing");
   startProcessingMessages();
   await chrome.storage.local.clear();
   await finalizeSession();
-  if (currentSession) startPolling(currentSession);
+
+  if (currentSession) {
+    startPolling(currentSession);
+  }
 });
 
 // ── Button: Retry ─────────────────────────────────────────────
@@ -321,6 +380,14 @@ async function resetToIdle() {
   if (audioStream) {
     audioStream.getTracks().forEach(t => t.stop());
     audioStream = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach(t => t.stop());
+    micStream = null;
+  }
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
   }
   currentSession = null;
   elapsedSeconds = 0;

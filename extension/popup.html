@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Notes Generator</title>
+  <title>NoteCraft Generator</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
@@ -11,53 +11,61 @@
   <div class="header">
     <div class="logo">
       <div class="logo-dot"></div>
-      <span class="logo-text">Notes Generator</span>
+      <span class="logo-text">NOTECRAFT</span>
     </div>
   </div>
 
   <!-- IDLE -->
   <div id="state-idle" class="state active">
-    <p class="hint">Open Google Meet and click Start Recording.</p>
-    <button id="btn-start" class="btn btn-primary">Start Recording</button>
+    <p class="hint">Ready to capture your next big idea. Open Google Meet to begin.</p>
+    <button id="btn-start" class="btn btn-primary">
+      <span>Start Recording</span>
+    </button>
   </div>
 
   <!-- RECORDING -->
   <div id="state-recording" class="state">
     <div class="recording-indicator">
-      <div class="pulse-dot"></div>
-      <span>Recording</span>
+      <div class="pulse-wrapper">
+        <div class="pulse-ring"></div>
+        <div class="pulse-dot"></div>
+      </div>
+      <span style="color: var(--danger); font-weight: 600; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase;">Live Recording</span>
     </div>
     <div id="timer" class="timer">00:00:00</div>
-    <p class="hint-small">Audio is being captured live.</p>
     <button id="btn-stop" class="btn btn-danger">End Meeting</button>
   </div>
 
   <!-- PROCESSING -->
   <div id="state-processing" class="state">
-    <div class="spinner"></div>
-    <p id="processing-text" class="status-text">Processing meeting...</p>
-    <p class="hint-small">Please wait. Do not close this window.</p>
+    <div class="spinner-container">
+      <div class="spinner"></div>
+    </div>
+    <div style="text-align: center;">
+      <p id="processing-text" class="status-text">Crafting Notes</p>
+      <p class="hint" style="font-size: 12px; margin-top: 8px;">Analyzing your meeting audio...</p>
+    </div>
   </div>
 
   <!-- READY -->
   <div id="state-ready" class="state">
-    <div class="success-icon">&#10003;</div>
-    <p class="status-text">Notes is ready!</p>
+    <div class="status-icon success-bg">✓</div>
+    <p class="status-text">Notes are Ready!</p>
     <div class="download-buttons">
       <a id="btn-docx" class="btn btn-download" target="_blank">Download DOCX</a>
     </div>
-    <button id="btn-new" class="btn btn-ghost">New Recording</button>
+    <button id="btn-new" class="btn btn-ghost">Start New Session</button>
   </div>
 
   <!-- ERROR -->
   <div id="state-error" class="state">
-    <div class="error-icon">&#10007;</div>
-    <p class="status-text">Processing failed.</p>
-    <p class="hint-small">Please retry.</p>
-    <button id="btn-retry" class="btn btn-primary">Retry</button>
-    <button id="btn-new-error" class="btn btn-ghost">Start New</button>
+    <div class="status-icon error-bg">✕</div>
+    <p class="status-text">Action Required</p>
+    <p class="hint">Something went wrong while processing.</p>
+    <button id="btn-retry" class="btn btn-primary">Try Again</button>
+    <button id="btn-new-error" class="btn btn-ghost">Reset Session</button>
   </div>
 
   <script src="popup.js"></script>
 </body>
-</html>
+</html>

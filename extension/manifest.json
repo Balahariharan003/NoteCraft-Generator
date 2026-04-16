@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "NoteCraft Generator",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Automatically generate Notes from Google Meet / Zoom",
 
   "permissions": [
     "activeTab",
     "scripting",
     "storage",
-    "tabs"
+    "tabs",
+    "offscreen"
   ],
 
   "host_permissions": [
@@ -24,8 +25,7 @@
   },
 
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "NoteCraft Generator"
+    "default_title": "Toggle NoteCraft Overlay"
   },
 
   "content_scripts": [
@@ -36,6 +36,13 @@
         "https://teams.microsoft.com/*"
       ],
       "js": ["content.js"]
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": ["ready.html", "popup.css", "popup.html", "popup.js"],
+      "matches": ["<all_urls>"]
     }
   ]
 }
