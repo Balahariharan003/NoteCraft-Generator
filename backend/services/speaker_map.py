@@ -5,7 +5,7 @@ from typing import List, Dict
 def assign_speakers(
     chunks: List[dict],
     speaker_timeline: List[dict],
-    chunk_duration_ms: int = 180000,  # 3 minutes per chunk
+    chunk_duration_ms: int = 30000,  # 30 seconds per chunk to match extension
 ) -> str:
     """
     Combines all chunk transcripts and assigns real speaker

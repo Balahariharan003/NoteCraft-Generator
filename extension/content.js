@@ -250,7 +250,7 @@
       // Step 1: Start mic capture via offscreen document (independent of Meet)
       console.log("🎤 Starting offscreen mic capture...");
       try {
-        const micResult = await chrome.runtime.sendMessage({ action: "START_OFFSCREEN_MIC" });
+        const micResult = await sendMessageSafe({ action: "START_OFFSCREEN_MIC" });
         if (micResult?.ok) {
           console.log("🎤 Offscreen mic started successfully!");
         } else {
@@ -273,7 +273,7 @@
       
       if (!tabAudioTrack) {
         isRecording = false;
-        chrome.runtime.sendMessage({ action: "STOP_OFFSCREEN_MIC" }).catch(() => {});
+        sendMessageSafe({ action: "STOP_OFFSCREEN_MIC" }).catch(() => {});
         return alert("Please share tab audio! Select the Meet tab and check 'Share tab audio'.");
       }
 
@@ -291,7 +291,7 @@
 
     } catch (err) {
       console.error("NoteCraft Error:", err);
-      chrome.runtime.sendMessage({ action: "STOP_OFFSCREEN_MIC" }).catch(() => {});
+      sendMessageSafe({ action: "STOP_OFFSCREEN_MIC" }).catch(() => {});
       isRecording = false;
       stopTimer();
       showState("idle");
@@ -319,7 +319,7 @@
   async function uploadChunk(tabBlob, index) {
     let micData = null;
     try {
-      const response = await chrome.runtime.sendMessage({ action: "GET_OFFSCREEN_MIC_CHUNK" });
+      const response = await sendMessageSafe({ action: "GET_OFFSCREEN_MIC_CHUNK" });
       if (response?.ok && response.data) {
         const raw = response.data;
         micData = (raw instanceof Uint8Array) ? raw : new Uint8Array(Object.values(raw));
@@ -337,8 +337,8 @@
       chunkIndex: index,
       timeline: JSON.stringify(speakerTimeline),
       participants: JSON.stringify(participants),
-      tabAudio: Array.from(new Uint8Array(tabBuffer)),
-      micAudio: micData ? Array.from(micData) : null
+      tabAudio: new Uint8Array(tabBuffer),
+      micAudio: micData
     });
 
     console.log(`📤 Chunk ${index} sent to background for upload`);
@@ -357,7 +357,7 @@
     if (audioStream) audioStream.getTracks().forEach(t => t.stop());
 
     // Stop offscreen mic
-    chrome.runtime.sendMessage({ action: "STOP_OFFSCREEN_MIC" }).catch(() => {});
+    sendMessageSafe({ action: "STOP_OFFSCREEN_MIC" }).catch(() => {});
 
     showState("processing");
     await finalizeSession();
@@ -409,6 +409,27 @@
     currentSession = null;
     elapsedSeconds = 0;
     shadowRoot.getElementById("timer").textContent = "00:00:00";
+  }
+
+  // Safe messaging helper to prevent context invalidation errors
+  async function sendMessageSafe(message, maxRetries = 3) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await chrome.runtime.sendMessage(message);
+      } catch (err) {
+        const isContextError = err?.message?.includes("context") || err?.message?.includes("Receiving end does not exist");
+        const shouldRetry = isContextError && attempt < maxRetries - 1;
+        
+        if (shouldRetry) {
+          const delayMs = 100 * Math.pow(2, attempt); // Exponential backoff: 100ms, 200ms, 400ms
+          console.warn(`⚠️ Extension context error (attempt ${attempt + 1}/${maxRetries}), retrying in ${delayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        } else {
+          console.error(`❌ Message failed after ${attempt + 1} attempts:`, err?.message);
+          throw err;
+        }
+      }
+    }
   }
 
   chrome.runtime.onMessage.addListener((msg) => {

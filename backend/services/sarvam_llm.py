@@ -177,7 +177,7 @@ async def generate_mom(
         f"Set all other sections to null."
     )
 
-    raw    = await _call_llm(system, user, max_tokens=3000)
+    raw    = await _call_llm(system, user, max_tokens=2000)
     parsed = _parse_json(raw)
 
     if parsed:
@@ -203,7 +203,7 @@ async def refine_mom(mom_json: dict) -> dict:
         "Return ONLY valid JSON with the same structure. No extra text, no markdown."
     )
     user   = f"Refine this class notes JSON:\n\n{json.dumps(mom_json, indent=2)}"
-    raw    = await _call_llm(system, user, max_tokens=3000)
+    raw    = await _call_llm(system, user, max_tokens=2000)
     parsed = _parse_json(raw)
     return parsed if parsed else mom_json
 
