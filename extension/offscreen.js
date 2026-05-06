@@ -1,189 +1,172 @@
-// offscreen.js — runs in the extension's own context (NOT in Meet's page)
-// This guarantees clean microphone access independent of Google Meet
+// offscreen.js — Chrome Extension Offscreen Document
+// Handles microphone capture and provides audio chunks to the background script.
 
 let micStream = null;
 let mediaRecorder = null;
 let isRecording = false;
-let pendingChunks = [];
+let chunkQueue = [];
+let maxChunks = 5; // ~5 seconds buffer
+let lastGoodChunk = null; // Backup buffer to prevent 0B chunks
 
-// Guard against multiple message handlers
-let messageHandlerAdded = false;
+// Handle messages from the background script
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.target !== 'offscreen') return false;
 
-function addMessageHandler() {
-  if (messageHandlerAdded) return;
-  messageHandlerAdded = true;
-  
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    try {
-      // Handle any message targeting offscreen
-      if (!msg.target || msg.target !== "offscreen") {
-        return false;
-      }
-
-      if (msg.action === "PING") {
-        sendResponse({ ok: true });
-        return false;
-      } else if (msg.action === "START_MIC") {
-        startMicCapture().then(sendResponse).catch(err => {
-          console.error("Start mic error:", err);
-          sendResponse({ ok: false, error: err.message || String(err) });
-        });
-        return true;
-      } else if (msg.action === "STOP_MIC") {
-        try {
-          stopMicCapture();
-          sendResponse({ ok: true });
-        } catch (err) {
-          sendResponse({ ok: false, error: err.message });
-        }
-        return false;
-      } else if (msg.action === "GET_MIC_CHUNK") {
-        getMicChunk().then(blob => {
-          if (blob) {
-            blob.arrayBuffer().then(buffer => {
-              sendResponse({ ok: true, data: new Uint8Array(buffer) });
-            }).catch(err => {
-              console.error("Get chunk error:", err);
-              sendResponse({ ok: false, error: err.message });
-            });
-          } else {
-            sendResponse({ ok: false });
-          }
-        }).catch(err => {
-          console.error("Get mic chunk error:", err);
-          sendResponse({ ok: false, error: err.message });
-        });
-        return true;
-      }
-      
+  switch (msg.action) {
+    case 'PING':
+      sendResponse({ ok: true });
+      break;
+    case 'START_MIC':
+      startMic().then(sendResponse);
+      return true;
+    case 'STOP_MIC':
+      stopMic();
+      sendResponse({ ok: true });
+      break;
+    case 'GET_MIC_CHUNK':
+      getChunk().then(sendResponse);
+      return true;
+    default:
       return false;
-    } catch (err) {
-      console.error("Message handler error:", err);
-      try {
-        sendResponse({ ok: false, error: err.message });
-      } catch (e) {
-        console.error("Failed to send error response:", e);
-      }
-      return false;
-    }
-  });
-}
+  }
+});
 
-// Add message handler
-addMessageHandler();
-
-async function startMicCapture() {
+/**
+ * Starts microphone capture using getUserMedia and initializes MediaRecorder.
+ */
+async function startMic() {
   try {
     if (isRecording) {
-      console.log("🎤 Mic already recording");
+      console.log('🎤 Mic already recording');
       return { ok: true };
     }
-    
-    // Request microphone access with compatible constraints
-    // Note: echoCancellation, noiseSuppression, autoGainControl are preferences, not requirements
-    try {
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: { ideal: false },
-          noiseSuppression: { ideal: false },
-          autoGainControl: { ideal: false }
-        },
-        video: false
-      });
-    } catch (err) {
-      // If the constraints failed, try simpler version
-      if (err.name === "OverconstrainedError") {
-        console.warn("🎤 Audio constraints overconstrained, trying simpler version");
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: false
-        });
-      } else {
-        throw err;
-      }
-    }
+
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      },
+      video: false
+    });
 
     const track = micStream.getAudioTracks()[0];
-    if (!track) {
-      throw new Error("No audio tracks available");
-    }
-    
-    console.log("🎤 Offscreen mic captured:", track.label);
+    if (!track) throw new Error('No audio tracks found');
 
+    console.log('🎤 Mic track captured:', track.label);
+
+    mediaRecorder = new MediaRecorder(micStream, {
+      mimeType: 'audio/webm;codecs=opus'
+    });
+
+    // mediaRecorder.ondataavailable = async (event) => {
+    //   if (event.data.size > 0) {
+    //     chunkQueue.push(event.data);
+    //     // Store as fallback
+    //     lastGoodChunk = event.data;
+    //   }
+    // };
+
+    mediaRecorder.ondataavailable = (e) => {
+  if (e.data.size > 0) {
+    chunkQueue.push(e.data);
+
+    // 🔥 keep only last few chunks
+    if (chunkQueue.length > maxChunks) {
+      chunkQueue.shift();
+    }
+  }
+};
+
+    // Use a 500ms timeslice for higher reliability
+    mediaRecorder.start(500);
     isRecording = true;
-    startNewRecorder();
-    
-    console.log("🎤 Offscreen mic recording started");
+    console.log('🎤 MediaRecorder started with 500ms timeslice');
+
     return { ok: true };
   } catch (err) {
-    console.error("🎤 Offscreen mic FAILED:", err);
-    isRecording = false;
-    // Clean up on failure
-    if (micStream) {
-      micStream.getTracks().forEach(t => t.stop());
-      micStream = null;
-    }
-    return { ok: false, error: err.message || String(err) };
+    console.error('🎤 Mic start failed:', err);
+    cleanup();
+    return { ok: false, error: err.message };
   }
 }
 
-function startNewRecorder() {
-  if (!micStream) return;
-  
-  mediaRecorder = new MediaRecorder(micStream, { mimeType: "audio/webm" });
-  pendingChunks = [];
-  
-  mediaRecorder.ondataavailable = (e) => {
-    if (e.data.size > 0) pendingChunks.push(e.data);
-  };
-  
-  mediaRecorder.start();
-}
+/**
+ * Combines all accumulated chunks in the queue and returns them as an ArrayBuffer.
+ * Uses lastGoodChunk as fallback if queue is empty.
+ */
 
-function getMicChunk() {
+
+function getChunk() {
   return new Promise((resolve) => {
-    if (!mediaRecorder || mediaRecorder.state !== "recording") {
-      console.warn("🎤 No active recorder for mic chunk");
-      resolve(null);
+
+    if (chunkQueue.length === 0) {
+      console.warn("⚠️ No mic data");
+      resolve({ ok: false });
       return;
     }
 
-    // To ensure each chunk has a valid WebM header, we stop the current 
-    // recorder and start a new one immediately.
-    mediaRecorder.onstop = () => {
-      if (pendingChunks.length > 0) {
-        resolve(new Blob(pendingChunks, { type: "audio/webm" }));
-      } else {
-        resolve(null);
-      }
-      if (isRecording) {
-        startNewRecorder();
-      }
-    };
+    // 🔥 combine recent chunks
+    const blob = new Blob(chunkQueue, { type: "audio/webm" });
 
-    mediaRecorder.stop();
+    blob.arrayBuffer().then(buffer => {
+      resolve({
+        ok: true,
+        data: buffer
+      });
+    });
   });
 }
+// async function getChunk() {
+//   let blob = null;
 
-function stopMicCapture() {
+//   if (chunkQueue.length > 0) {
+//     // We have fresh data
+//     blob = new Blob(chunkQueue, { type: 'audio/webm' });
+//     chunkQueue = []; // Reset queue
+//     console.log('🎤 Serving fresh mic chunk from queue');
+//   } else if (lastGoodChunk) {
+//     // Fallback to last successful chunk
+//     blob = new Blob([lastGoodChunk], { type: 'audio/webm' });
+//     console.log('🎤 Serving fallback mic chunk (lastGoodChunk)');
+//   } else {
+//     // Truly empty
+//     console.warn('🎤 No mic data available in queue or fallback');
+//     return { ok: false, error: 'No data available' };
+//   }
+
+//   try {
+//     const buffer = await blob.arrayBuffer();
+//     return { ok: true, data: buffer };
+//   } catch (err) {
+//     console.error('🎤 Error creating chunk buffer:', err);
+//     return { ok: false, error: err.message };
+//   }
+// }
+
+/**
+ * Stops recording and cleans up resources.
+ */
+function stopMic() {
   isRecording = false;
-  if (mediaRecorder && mediaRecorder.state === "recording") {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
   }
-  if (micStream) {
-    micStream.getTracks().forEach(t => t.stop());
-    micStream = null;
-  }
-  console.log("🎤 Offscreen mic stopped");
+  cleanup();
+  console.log('🎤 Mic recording stopped');
 }
 
-// ── Auto-request permission if opened as a tab ────────────────
-if (window.location.hash === "#allow") {
-  navigator.mediaDevices.getUserMedia({ audio: true })
-    .then(() => {
-      document.body.innerHTML = "<h1>Permission Granted!</h1><p>You can close this tab and start recording now.</p>";
-    })
-    .catch((err) => {
-      document.body.innerHTML = `<h1>Permission Denied</h1><p>${err.message}</p>`;
-    });
+/**
+ * Releases microphone and resets state.
+ */
+function cleanup() {
+  if (micStream) {
+    micStream.getTracks().forEach(track => track.stop());
+    micStream = null;
+  }
+
+  chunkQueue = [];
+  lastGoodChunk = null;
+
+  console.log("🎤 Mic resources released");
 }

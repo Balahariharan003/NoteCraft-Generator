@@ -1,76 +1,12 @@
 import json
 import asyncio
 import os
-import tempfile
-import subprocess
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from session.store import save_chunk, get_session, create_session
 from services.sarvam_stt import transcribe_chunk
 from services.sarvam_llm import clean_transcript, summarise_chunk
 
 router = APIRouter()
-
-
-# ── Merge tab audio + mic audio using ffmpeg ───────────────────
-def merge_audio_files(tab_bytes: bytes, mic_bytes: bytes) -> bytes:
-    """
-    Merges tab audio (friends' voices) with mic audio (your voice)
-    using ffmpeg's amix filter. Returns the merged WAV/WebM bytes.
-    """
-    tmp_tab = tmp_mic = tmp_out = None
-    try:
-        # Write tab audio to temp file
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
-            f.write(tab_bytes)
-            tmp_tab = f.name
-
-        # Write mic audio to temp file
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
-            f.write(mic_bytes)
-            tmp_mic = f.name
-
-        tmp_out = tmp_tab.replace(".webm", "_merged.webm")
-
-        # Use ffmpeg amix to merge the two audio streams
-        # The mic is boosted by 2x to ensure user's voice is clear
-        result = subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-i", tmp_tab,
-                "-i", tmp_mic,
-                "-filter_complex",
-                "[0:a]volume=1.0[tab];[1:a]volume=2.0[mic];[tab][mic]amix=inputs=2:duration=longest:dropout_transition=2[out]",
-                "-map", "[out]",
-                "-ac", "1",
-                "-ar", "16000",
-                "-f", "webm",
-                tmp_out
-            ],
-            capture_output=True, timeout=120,
-        )
-
-        if result.returncode != 0:
-            print(f"ffmpeg merge error: {result.stderr.decode()[-500:]}")
-            # Fall back to tab audio only
-            return tab_bytes
-
-        with open(tmp_out, "rb") as f:
-            merged = f.read()
-
-        print(f"Audio merge: tab={len(tab_bytes)}B + mic={len(mic_bytes)}B → merged={len(merged)}B")
-        return merged
-
-    except Exception as e:
-        print(f"Audio merge failed: {e}")
-        return tab_bytes  # Fall back to tab audio only
-    finally:
-        for p in [tmp_tab, tmp_mic, tmp_out]:
-            try:
-                if p and os.path.exists(p):
-                    os.unlink(p)
-            except Exception:
-                pass
-
 
 # ── POST /upload-chunk ─────────────────────────────────────────
 @router.post("/upload-chunk")
@@ -80,11 +16,9 @@ async def upload_chunk(
     chunk_index:     int        = Form(...),
     speaker_timeline: str       = Form(default="[]"),
     participants:    str        = Form(default="[]"),
-    mic_audio:       UploadFile = File(default=None),
 ):
     """
-    Receives one audio chunk from the extension.
-    If mic_audio is provided, merges it with the tab audio before processing.
+    Receives a single merged audio chunk (tab + mic) from the extension.
     """
 
     # ── Validate ───────────────────────────────────────────────
@@ -110,16 +44,7 @@ async def upload_chunk(
     if len(audio_bytes) == 0:
         raise HTTPException(status_code=400, detail="Empty audio file received")
 
-    # ── Merge mic audio if present ─────────────────────────────
-    if mic_audio is not None:
-        mic_bytes = await mic_audio.read()
-        if len(mic_bytes) > 100:
-            print(f"Chunk {chunk_index}: Merging tab ({len(audio_bytes)}B) + mic ({len(mic_bytes)}B)")
-            audio_bytes = merge_audio_files(audio_bytes, mic_bytes)
-        else:
-            print(f"Chunk {chunk_index}: Mic audio too small ({len(mic_bytes)}B), using tab only")
-    else:
-        print(f"Chunk {chunk_index}: No mic audio, using tab only ({len(audio_bytes)}B)")
+    print(f"Chunk {chunk_index} received: {len(audio_bytes)}B (merged stream)")
 
     # ── Save chunk as pending immediately ─────────────────────
     save_chunk(session_id, chunk_index, {
@@ -147,10 +72,6 @@ async def upload_chunk(
 async def process_chunk(session_id: str, chunk_index: int, audio_bytes: bytes):
     """
     Runs in the background while the meeting continues.
-    Steps:
-        1. STT  — get raw transcript + word timestamps
-        2. Clean — remove fillers and ASR errors
-        3. Summarise — 3-5 bullet summary with context carryover
     """
     try:
         # ── Step 1: Speech to text ─────────────────────────────

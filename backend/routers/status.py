@@ -71,6 +71,34 @@ async def download_file(filename: str):
     )
 
 
+# ── GET /download/{session_id} ──────────────────────────────────
+@router.get("/download/{session_id}")
+async def download_by_session(session_id: str):
+    """
+    Convenience endpoint for the extension to download by session ID.
+    Retrieves the actual filename from the session store.
+    """
+    session = get_session(session_id)
+    if not session or not session.get("docx_url"):
+        raise HTTPException(status_code=404, detail="Download not ready or session not found")
+
+    docx_url = session.get("docx_url") # e.g. "/outputs/Meeting_Notes_abc123.docx"
+    filename = os.path.basename(docx_url)
+    file_path = os.path.abspath(os.path.join(OUTPUTS_DIR, filename))
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File has been deleted or not found")
+
+    media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type=media_type,
+        background=BackgroundTask(_cleanup_after_download, session_id, file_path)
+    )
+
+
 # ── Cleanup runs AFTER file is fully downloaded ────────────────
 def _cleanup_after_download(session_id: str, file_path: str):
     """
