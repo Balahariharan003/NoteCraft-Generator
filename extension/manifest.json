@@ -9,7 +9,8 @@
     "activeTab",
     "scripting",
     "storage",
-    "tabs"
+    "tabs",
+    "offscreen"
   ],
 
   "host_permissions": [
@@ -42,6 +43,7 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "offscreen.html",
         "ready.html",
         "popup.css",
         "popup.html",
