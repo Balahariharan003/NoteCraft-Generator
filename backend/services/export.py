@@ -1,318 +1,374 @@
 import os
-from docx import Document
-from docx.shared import Pt, RGBColor, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
+import re
 from datetime import datetime
+
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 OUTPUTS_DIR = os.path.join(os.path.dirname(__file__), "..", "outputs")
 
 
-# ── Main export function ───────────────────────────────────────
+# ─────────────────────────────────────────────
+# MAIN EXPORT FUNCTION
+# ─────────────────────────────────────────────
 def export_documents(mom_json: dict, session_id: str) -> tuple:
     os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
-    # Generate clean filename from session title
     raw_title = (
-        mom_json.get("session_title") or
-        mom_json.get("title") or
-        "Class_Notes"
+        mom_json.get("session_title")
+        or mom_json.get("title")
+        or "MoM_Report"
     )
-    # Clean filename — remove special chars, replace spaces with underscores
-    import re
-    clean_name = re.sub(r'[^\w\s-]', '', raw_title)
-    clean_name = re.sub(r'\s+', '_', clean_name.strip())
-    clean_name = clean_name[:60]  # max 60 chars
 
-    # Add session_id suffix to avoid collisions
-    filename  = f"{clean_name}_{session_id[:8]}"
+    clean_name = re.sub(r"[^\w\s-]", "", str(raw_title))
+    clean_name = re.sub(r"\s+", "_", clean_name.strip())
+    clean_name = clean_name[:60]
+
+    filename = f"{clean_name}_{session_id[:8]}"
     docx_path = os.path.join(OUTPUTS_DIR, f"{filename}.docx")
 
     _generate_docx(mom_json, docx_path)
+
     return None, f"/outputs/{filename}.docx"
 
 
-def delete_documents(session_id: str):
-    for ext in ["pdf", "docx"]:
-        path = os.path.join(OUTPUTS_DIR, f"{session_id}.{ext}")
-        if os.path.exists(path):
-            os.remove(path)
+# ─────────────────────────────────────────────
+# DOCX GENERATION
+# ─────────────────────────────────────────────
+def _generate_docx(data: dict, path: str):
 
-
-# ── Helper: check if a field has real content ──────────────────
-def _has_content(value) -> bool:
-    """Returns True only if value has actual content — not null/empty."""
-    if value is None:
-        return False
-    if isinstance(value, list):
-        return len(value) > 0 and any(
-            str(v).strip() for v in value if v is not None
-        )
-    if isinstance(value, str):
-        return len(value.strip()) > 0
-    if isinstance(value, dict):
-        return any(_has_content(v) for v in value.values())
-    return bool(value)
-
-
-# ══ DOCX Generation ════════════════════════════════════════════
-def _generate_docx(notes: dict, path: str):
     doc = Document()
 
-    for section in doc.sections:
-        section.top_margin    = Pt(50)
-        section.bottom_margin = Pt(50)
-        section.left_margin   = Pt(70)
-        section.right_margin  = Pt(70)
+    # PAGE SETTINGS
+    section = doc.sections[0]
 
-    # ── Title ──────────────────────────────────────────────────
-    title = notes.get("session_title") or notes.get("title") or "Class Session Notes"
-    title_para = doc.add_paragraph()
-    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title_para.add_run(title)
-    run.bold           = True
-    run.font.size      = Pt(18)
-    run.font.color.rgb = RGBColor(26, 26, 40)
+    section.top_margin = Pt(40)
+    section.bottom_margin = Pt(40)
+    section.left_margin = Pt(40)
+    section.right_margin = Pt(40)
 
-    sub_para = doc.add_paragraph()
-    sub_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    sub_run = sub_para.add_run("ONLINE CLASS SESSION NOTES")
-    sub_run.font.size      = Pt(10)
-    sub_run.font.color.rgb = RGBColor(83, 74, 183)
-    sub_run.bold           = True
+    # FOOTER
+    footer = section.footer
+    footer_para = footer.paragraphs[0]
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _add_page_number(footer_para)
+
+    # HEADER TITLE
+    dept_para = doc.add_paragraph()
+    dept_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    run = dept_para.add_run(
+        "Department : CSE\nNandha Engineering College"
+    )
+    run.bold = True
+    run.font.size = Pt(10)
+
+    # HEADER TABLE
+    table = doc.add_table(rows=3, cols=6)
+    table.style = "Table Grid"
+
+    def set_cell(r, c, text, bold=False, center=False):
+        cell = table.cell(r, c)
+        cell.text = str(text)
+
+        para = cell.paragraphs[0]
+
+        if center:
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        run = para.runs[0]
+        run.font.size = Pt(9)
+
+        if bold:
+            run.bold = True
+
+    # ROW 1
+    set_cell(0, 0, "Name of the\nMeeting", True)
+
+    meeting_title = (
+        data.get("session_title")
+        or data.get("title")
+        or "Faculty Meeting"
+    )
+
+    meeting_cell = table.cell(0, 1).merge(table.cell(0, 2))
+    meeting_cell.text = str(meeting_title)
+    meeting_cell.paragraphs[0].runs[0].font.size = Pt(9)
+
+    set_cell(0, 3, "Number", True)
+
+    num_cell = table.cell(0, 4).merge(table.cell(0, 5))
+    num_cell.text = f"2025-26/ {datetime.now().strftime('%m')}"
+    num_cell.paragraphs[0].runs[0].font.size = Pt(9)
+
+    # ROW 2
+    set_cell(1, 0, "Date", True)
+
+    set_cell(
+        1,
+        1,
+        datetime.now().strftime("%Y-%m-%d")
+    )
+
+    set_cell(1, 2, "Time", True)
+
+    set_cell(
+        1,
+        3,
+        data.get("time") or "None"
+    )
+
+    set_cell(1, 4, "Venue", True)
+
+    set_cell(
+        1,
+        5,
+        data.get("venue")
+        or "Block III – Staff Floor Cabin"
+    )
+
+    # ROW 3
+    set_cell(2, 0, "Members Present", True)
+
+    members_cell = table.cell(2, 1).merge(table.cell(2, 5))
+
+    participants = data.get("participants") or []
+
+    # FIXED NoneType issue
+    if isinstance(participants, list) and participants:
+        members_cell.text = ", ".join(
+            [str(p) for p in participants if p]
+        )
+    else:
+        members_cell.text = "HoD and All faculty members"
+
+    members_cell.paragraphs[0].runs[0].font.size = Pt(9)
 
     doc.add_paragraph()
 
-    # ── 1. Session Details ─────────────────────────────────────
-    # Only show rows that have content
-    session_fields = [
-        ("Course Name",      notes.get("course_name")),
-        ("Subject / Topic",  notes.get("subject_topic")),
-        ("Date",             notes.get("date")),
-        ("Time",             notes.get("time")),
-        ("Platform",         notes.get("platform", "Google Meet")),
-        ("Instructor",       notes.get("instructor_name")),
-        ("Prepared By",      notes.get("prepared_by", "MoM Generator")),
+    # TITLE
+    title_para = doc.add_paragraph()
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    run = title_para.add_run("Minutes of the Meeting")
+    run.bold = True
+    run.font.size = Pt(12)
+    run.underline = True
+
+    doc.add_paragraph()
+
+    # MAIN MOM TABLE
+    mom_table = doc.add_table(rows=1, cols=4)
+    mom_table.style = "Table Grid"
+
+    headers = [
+        "Category",
+        "Points Discussed",
+        "Responsibility",
+        "Target Date"
     ]
 
-    active_fields = [(k, v) for k, v in session_fields if _has_content(v)]
+    hdr_cells = mom_table.rows[0].cells
 
-    if active_fields:
-        _docx_heading(doc, "1. Session Details")
-        table = doc.add_table(rows=len(active_fields), cols=2)
-        table.style = "Table Grid"
-        for i, (label, value) in enumerate(active_fields):
-            row = table.rows[i]
-            label_run = row.cells[0].paragraphs[0].add_run(label)
-            label_run.bold      = True
-            label_run.font.size = Pt(10)
-            value_run = row.cells[1].paragraphs[0].add_run(str(value))
-            value_run.font.size = Pt(10)
-        doc.add_paragraph()
+    for i, h in enumerate(headers):
+        hdr_cells[i].text = h
 
-    # ── 2. Session Overview ────────────────────────────────────
-    if _has_content(notes.get("session_overview")):
-        _docx_heading(doc, "2. Session Overview")
-        for item in notes["session_overview"]:
-            if _has_content(item):
-                _docx_bullet(doc, item)
-        doc.add_paragraph()
+        para = hdr_cells[i].paragraphs[0]
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    # ── 3. Learning Objectives ─────────────────────────────────
-    if _has_content(notes.get("learning_objectives")):
-        _docx_heading(doc, "3. Learning Objectives")
-        for item in notes["learning_objectives"]:
-            if _has_content(item):
-                _docx_bullet(doc, item)
-        doc.add_paragraph()
+        run = para.runs[0]
+        run.bold = True
+        run.font.size = Pt(10)
 
-    # ── 4. Topics Covered ──────────────────────────────────────
-    if _has_content(notes.get("topics_covered")):
-        _docx_heading(doc, "4. Topics Covered")
-        for i, topic in enumerate(notes["topics_covered"], 1):
-            if not isinstance(topic, dict):
-                continue
-            name = topic.get("name", f"Topic {i}")
-            # Sub-heading for each topic
-            sub = doc.add_paragraph()
-            sub_run = sub.add_run(f"4.{i}  {name}")
-            sub_run.bold           = True
-            sub_run.font.size      = Pt(11)
-            sub_run.font.color.rgb = RGBColor(30, 30, 60)
+        _set_cell_background(hdr_cells[i], "D9D9D9")
 
-            if _has_content(topic.get("explanation")):
-                doc.add_paragraph(f"Explanation: {topic['explanation']}")
+    # DYNAMIC CATEGORY SECTION
+    categories = data.get("categories") or []
 
-            if _has_content(topic.get("key_points")):
-                kp_para = doc.add_paragraph()
-                kp_para.add_run("Key Points:").bold = True
-                for kp in topic["key_points"]:
-                    if _has_content(kp):
-                        _docx_bullet(doc, kp)
+    # fallback
+    if not categories:
+        categories = [
+            {
+                "name": "General Discussion",
+                "points": [
+                    "Meeting discussion points were reviewed."
+                ],
+                "responsibility": "All",
+                "target_date": "Continuous"
+            }
+        ]
 
-            if _has_content(topic.get("examples")):
-                ex_para = doc.add_paragraph()
-                ex_para.add_run("Examples:").bold = True
-                for ex in topic["examples"]:
-                    if _has_content(ex):
-                        _docx_bullet(doc, ex)
+    for idx, cat in enumerate(categories, start=1):
 
-            if _has_content(topic.get("important_notes")):
-                note_para = doc.add_paragraph()
-                note_run  = note_para.add_run(f"Important: {topic['important_notes']}")
-                note_run.font.color.rgb = RGBColor(180, 50, 50)
-                note_run.font.size      = Pt(10)
+        # FIX None categories
+        if not isinstance(cat, dict):
+            continue
 
-            doc.add_paragraph()
+        row = mom_table.add_row()
 
-    # ── 5. Detailed Concepts ───────────────────────────────────
-    if _has_content(notes.get("concepts")):
-        _docx_heading(doc, "5. Detailed Explanation (Concept Notes)")
-        for concept in notes["concepts"]:
-            if not isinstance(concept, dict):
-                continue
-            name = concept.get("name", "Concept")
-            c_para = doc.add_paragraph()
-            c_run  = c_para.add_run(f"● {name}")
-            c_run.bold      = True
-            c_run.font.size = Pt(11)
+        # CATEGORY
+        category_cell = row.cells[0]
 
-            if _has_content(concept.get("definition")):
-                _docx_indented(doc, f"Definition: {concept['definition']}")
-            if _has_content(concept.get("explanation")):
-                _docx_indented(doc, f"Explanation: {concept['explanation']}")
-            if _has_content(concept.get("real_example")):
-                _docx_indented(doc, f"Example: {concept['real_example']}")
+        category_name = f"{idx}. {cat.get('name') or 'General'}"
 
-            doc.add_paragraph()
+        category_cell.text = category_name
 
-    # ── 6. Examples / Problems Solved ─────────────────────────
-    if _has_content(notes.get("examples")):
-        _docx_heading(doc, "6. Examples / Problems Solved")
-        for i, ex in enumerate(notes["examples"], 1):
-            if not isinstance(ex, dict):
-                continue
-            ex_title = doc.add_paragraph()
-            ex_run   = ex_title.add_run(f"Example {i}:")
-            ex_run.bold      = True
-            ex_run.font.size = Pt(10)
+        cat_run = category_cell.paragraphs[0].runs[0]
+        cat_run.bold = True
+        cat_run.font.size = Pt(9)
 
-            if _has_content(ex.get("question")):
-                _docx_indented(doc, f"Question: {ex['question']}")
-            if _has_content(ex.get("solution_steps")):
-                _docx_indented(doc, f"Solution: {ex['solution_steps']}")
-            if _has_content(ex.get("final_answer")):
-                ans_para = doc.add_paragraph()
-                ans_run  = ans_para.add_run(f"    Answer: {ex['final_answer']}")
-                ans_run.bold            = True
-                ans_run.font.size       = Pt(10)
-                ans_run.font.color.rgb  = RGBColor(15, 110, 86)
+        # POINTS
+        points_cell = row.cells[1]
 
-            doc.add_paragraph()
+        points = cat.get("points") or []
 
-    # ── 7. Key Takeaways ──────────────────────────────────────
-    if _has_content(notes.get("key_takeaways")):
-        _docx_heading(doc, "7. Key Takeaways ⭐")
-        for item in notes["key_takeaways"]:
-            if _has_content(item):
-                _docx_bullet(doc, item)
-        doc.add_paragraph()
+        # FIX None points
+        if not isinstance(points, list):
+            points = [str(points)]
 
-    # ── 8. Formulas / Definitions ─────────────────────────────
-    if _has_content(notes.get("formulas_definitions")):
-        _docx_heading(doc, "8. Important Formulas / Definitions")
-        for item in notes["formulas_definitions"]:
-            if _has_content(item):
-                _docx_bullet(doc, item)
-        doc.add_paragraph()
+        if points:
 
-    # ── 9. Questions & Answers ────────────────────────────────
-    if _has_content(notes.get("questions_answers")):
-        _docx_heading(doc, "9. Questions & Answers")
-        for i, qa in enumerate(notes["questions_answers"], 1):
-            if not isinstance(qa, dict):
-                continue
-            if _has_content(qa.get("question")):
-                q_para = doc.add_paragraph()
-                q_run  = q_para.add_run(f"Q{i}: {qa['question']}")
-                q_run.bold      = True
-                q_run.font.size = Pt(10)
-            if _has_content(qa.get("answer")):
-                _docx_indented(doc, f"A: {qa['answer']}")
-        doc.add_paragraph()
+            first_para = points_cell.paragraphs[0]
+            first_para.style = "List Bullet"
 
-    # ── 10. Assignments ───────────────────────────────────────
-    if _has_content(notes.get("assignments")):
-        _docx_heading(doc, "10. Assignments / Practice Work")
-        for item in notes["assignments"]:
-            if _has_content(item):
-                _docx_bullet(doc, item)
-        doc.add_paragraph()
+            first_run = first_para.add_run(str(points[0]))
+            first_run.font.size = Pt(9)
 
-    # ── 11. Study Resources ───────────────────────────────────
-    if _has_content(notes.get("study_resources")):
-        _docx_heading(doc, "11. Study Resources")
-        for item in notes["study_resources"]:
-            if _has_content(item):
-                _docx_bullet(doc, item)
-        doc.add_paragraph()
+            for p_text in points[1:]:
 
-    # ── 12. Additional Notes ──────────────────────────────────
-    if _has_content(notes.get("additional_notes")):
-        _docx_heading(doc, "12. Additional Notes")
-        for item in notes["additional_notes"]:
-            if _has_content(item):
-                _docx_bullet(doc, item)
-        doc.add_paragraph()
+                p = points_cell.add_paragraph(
+                    style="List Bullet"
+                )
 
-    # ── 13. Revision Summary ──────────────────────────────────
-    if _has_content(notes.get("revision_summary")):
-        _docx_heading(doc, "13. Revision Summary (1-Minute Review)")
-        for item in notes["revision_summary"]:
-            if _has_content(item):
-                _docx_bullet(doc, item)
-        doc.add_paragraph()
+                r = p.add_run(str(p_text))
+                r.font.size = Pt(9)
 
-    # ── Footer ────────────────────────────────────────────────
-    footer      = doc.sections[0].footer
-    footer_para = footer.paragraphs[0]
-    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer_run  = footer_para.add_run("Generated by NoteCraft Generator (NCG)")
-    footer_run.font.size      = Pt(8)
-    footer_run.font.color.rgb = RGBColor(150, 150, 150)
+        else:
+            points_cell.text = "Discussion conducted."
 
-    doc.save(path)
+        # RESPONSIBILITY
+        res_cell = row.cells[2]
+
+        res_cell.text = str(
+            cat.get("responsibility") or "All"
+        )
+
+        res_para = res_cell.paragraphs[0]
+        res_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        res_para.runs[0].font.size = Pt(9)
+
+        # TARGET DATE
+        td_cell = row.cells[3]
+
+        td_cell.text = str(
+            cat.get("target_date") or "Continuous"
+        )
+
+        td_para = td_cell.paragraphs[0]
+        td_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        td_para.runs[0].font.size = Pt(9)
+
+    doc.add_paragraph()
+
+    # INFORMATION ITEMS
+    info_para = doc.add_paragraph()
+
+    run = info_para.add_run("Information Items")
+    run.bold = True
+    run.font.size = Pt(11)
+    run.underline = True
+
+    info_items = (
+        data.get("information_items")
+        or data.get("key_takeaways")
+        or []
+    )
+
+    # FIX NoneType issue
+    if not isinstance(info_items, list):
+        info_items = [str(info_items)]
+
+    if not info_items:
+        info_items = [
+            "Faculty members are requested to complete pending work.",
+            "Upcoming activities will be communicated shortly.",
+            "All members should follow department schedule."
+        ]
+
+    for item in info_items:
+
+        p = doc.add_paragraph(style="List Bullet")
+
+        r = p.add_run(str(item))
+        r.font.size = Pt(9)
+
+    # SAVE DOCX
+    try:
+        doc.save(path)
+        print("✅ DOCX saved:", path)
+
+    except Exception as e:
+        print("❌ DOCX save failed:", e)
+        raise
 
 
-# ── Section heading with purple underline ──────────────────────
-def _docx_heading(doc: Document, title: str):
-    para = doc.add_paragraph()
-    run  = para.add_run(title)
-    run.bold           = True
-    run.font.size      = Pt(11)
-    run.font.color.rgb = RGBColor(83, 74, 183)
-    pPr    = para._p.get_or_add_pPr()
-    pBdr   = OxmlElement("w:pBdr")
-    bottom = OxmlElement("w:bottom")
-    bottom.set(qn("w:val"),   "single")
-    bottom.set(qn("w:sz"),    "6")
-    bottom.set(qn("w:space"), "1")
-    bottom.set(qn("w:color"), "534AB7")
-    pBdr.append(bottom)
-    pPr.append(pBdr)
+# ─────────────────────────────────────────────
+# CELL BACKGROUND COLOR
+# ─────────────────────────────────────────────
+def _set_cell_background(cell, color):
+
+    tc_pr = cell._tc.get_or_add_tcPr()
+
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:fill"), color)
+
+    tc_pr.append(shd)
 
 
-# ── Bullet point ───────────────────────────────────────────────
-def _docx_bullet(doc: Document, text: str):
-    para = doc.add_paragraph(style="List Bullet")
-    run  = para.add_run(str(text))
-    run.font.size = Pt(10)
+# ─────────────────────────────────────────────
+# PAGE NUMBER
+# ─────────────────────────────────────────────
+def _add_page_number(paragraph):
 
+    paragraph.add_run("Page ")
 
-# ── Indented text (for sub-items) ─────────────────────────────
-def _docx_indented(doc: Document, text: str):
-    para = doc.add_paragraph()
-    para.paragraph_format.left_indent = Pt(20)
-    run  = para.add_run(str(text))
-    run.font.size = Pt(10)
+    # Field: PAGE
+    run = paragraph.add_run()
+    fld_begin = OxmlElement("w:fldChar")
+    fld_begin.set(qn("w:fldCharType"), "begin")
+    run._r.append(fld_begin)
+
+    run = paragraph.add_run()
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = "PAGE"
+    run._r.append(instr)
+
+    run = paragraph.add_run()
+    fld_end = OxmlElement("w:fldChar")
+    fld_end.set(qn("w:fldCharType"), "end")
+    run._r.append(fld_end)
+
+    paragraph.add_run(" of ")
+
+    # Field: NUMPAGES
+    run = paragraph.add_run()
+    fld_begin2 = OxmlElement("w:fldChar")
+    fld_begin2.set(qn("w:fldCharType"), "begin")
+    run._r.append(fld_begin2)
+
+    run = paragraph.add_run()
+    instr2 = OxmlElement("w:instrText")
+    instr2.set(qn("xml:space"), "preserve")
+    instr2.text = "NUMPAGES"
+    run._r.append(instr2)
+
+    run = paragraph.add_run()
+    fld_end2 = OxmlElement("w:fldChar")
+    fld_end2.set(qn("w:fldCharType"), "end")
+    run._r.append(fld_end2)
