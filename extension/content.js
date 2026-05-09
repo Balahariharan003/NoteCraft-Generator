@@ -1,5 +1,5 @@
 // content.js — NoteCraft Generator Content Script
-// Injected into meeting pages to scrape data and manage recording.
+// Injected into meeting pages to provide the floating assistant widget.
 
 (function () {
   if (window.notecraftInjected) return;
@@ -11,6 +11,7 @@
 
   let shadowRoot = null;
   let container = null;
+  let widget = null;
   let isRecording = false;
   let currentSession = null;
   let chunkIndex = 0;
@@ -19,7 +20,7 @@
   let elapsedSeconds = 0;
   let recordingStart = null;
   let mediaRecorder = null;
-  let audioStream = null; // This will be the merged stream
+  let audioStream = null;
   let micStream = null;
   let tabStream = null;
   let audioCtx = null;
@@ -41,18 +42,35 @@
     },
   };
 
-  /**
-   * Scrapes participants from the current meeting.
-   */
+  // ── HELPER: Safe Storage ──────────────────────────────────────
+  function safeStorageSet(data) {
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        chrome.storage.local.set(data);
+      }
+    } catch (e) {
+      console.warn("Storage access failed (likely context invalidated). Please refresh the page.");
+    }
+  }
+
+  function safeStorageGet(keys, callback) {
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        chrome.storage.local.get(keys, callback);
+      }
+    } catch (e) {
+      console.warn("Storage access failed (likely context invalidated).");
+    }
+  }
+
+  // ── SCRAPING LOGIC ───────────────────────────────────────────
+
   function scrapeParticipants() {
     const sel = SELECTORS[PLATFORM]?.participants;
     if (!sel) return [];
     return [...new Set(Array.from(document.querySelectorAll(sel)).map(el => el.textContent.trim()).filter(n => n.length > 0))];
   }
 
-  /**
-   * Monitors active speaker and participant list.
-   */
   function startScraping() {
     const observer = new MutationObserver(() => {
       const sel = SELECTORS[PLATFORM]?.activeSpeaker;
@@ -62,7 +80,7 @@
 
       if (name && name !== lastSpeaker && isRecording) {
         lastSpeaker = name;
-        const elapsed = Date.now() - recordingStart;
+        const elapsed = Date.now() - (recordingStart || Date.now());
         speakerTimeline.push({ name, timestamp_ms: elapsed });
         console.log('🗣️ Speaker detected:', name);
       }
@@ -75,10 +93,9 @@
     }, 10000);
   }
 
-  /**
-   * Injects the NoteCraft UI overlay.
-   */
-  function injectUI() {
+  // ── UI INJECTION ─────────────────────────────────────────────
+
+  async function injectUI() {
     if (document.getElementById('notecraft-root')) return;
 
     const host = document.createElement('div');
@@ -88,113 +105,222 @@
 
     container = document.createElement('div');
     container.id = 'nc-container';
-    shadowRoot.appendChild(container); 
-    updateUI('idle'); 
+    shadowRoot.appendChild(container);
+
+    try {
+      const cssUrl = chrome.runtime.getURL('popup.css');
+      const response = await fetch(cssUrl);
+      const cssText = await response.text();
+      
+      const style = document.createElement('style');
+      style.textContent = cssText + `
+        #nc-widget { 
+          position: fixed !important; 
+          bottom: auto !important; 
+          right: auto !important; 
+          opacity: 1 !important;
+          background: #111827 !important;
+          background-color: #111827 !important;
+          backdrop-filter: none !important;
+          -webkit-backdrop-filter: none !important;
+          /* Remove !important from left/top to allow dragging via JS */
+          left: 20px;
+          top: 20px;
+        }
+      `;
+      shadowRoot.appendChild(style);
+    } catch (err) {
+      console.error("Failed to load popup.css:", err);
+    }
+
+    updateUI('idle');
+    initWidgetPosition();
   }
 
-  /**
-   * Updates the UI state.
-   */
   function updateUI(state, data = {}) {
-    let content = '';
-    const styles = `
-      <style>
-        #nc-panel {
-          position: fixed;
-          top: 20px;
-          right: 20px;
-          width: 300px;
-          background: #111;
-          color: #fff;
-          padding: 20px;
-          border-radius: 12px;
-          font-family: sans-serif;
-          z-index: 999999;
-          box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-          border: 1px solid #333;
-        }
-        button {
-          width: 100%;
-          padding: 10px;
-          margin-top: 10px;
-          border-radius: 6px;
-          border: none;
-          cursor: pointer;
-          font-weight: bold;
-        }
-        #btn-start { background: #4f46e5; color: white; }
-        #btn-stop { background: #ef4444; color: white; }
-        #btn-download { background: #10b981; color: white; }
-        #timer { font-size: 24px; font-weight: bold; margin: 10px 0; text-align: center; }
-        .status { color: #9ca3af; font-size: 14px; text-align: center; }
-      </style>
+    const html = `
+      <div id="nc-widget" class="${isRecording ? 'recording' : ''}">
+        <div class="nc-header" id="nc-drag-handle">
+          <div class="nc-logo-group">
+            <div class="nc-dot"></div>
+            <span class="nc-title">NoteCraft AI</span>
+          </div>
+          <div class="nc-actions">
+            <button class="nc-action-btn" id="nc-minimize" title="Minimize">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="nc-bubble-content" id="nc-bubble">
+          <div class="nc-pulse"></div>
+          <div class="nc-dot" style="width: 16px; height: 16px; margin: 0 auto 4px;"></div>
+          <div class="nc-bubble-timer" id="bubble-timer">00:00</div>
+        </div>
+
+        <div id="nc-main-body">
+          ${getStateContent(state, data)}
+        </div>
+      </div>
     `;
 
+    container.innerHTML = html;
+    widget = shadowRoot.getElementById('nc-widget');
+    
+    attachListeners(state);
+    initDraggable();
+  }
+
+  function getStateContent(state, data) {
     switch (state) {
       case 'idle':
-        content = `
-          <div id="nc-panel">
-            <h3>NoteCraft</h3>
-            <p class="status">Ready to capture notes.</p>
-            <button id="btn-start">Start Recording</button>
+        return `
+          <div id="state-idle" class="nc-content active">
+            <div style="text-align: center; padding: 10px 0;">
+              <p class="nc-status">Ready to capture your meeting insights.</p>
+              <button id="btn-start" class="nc-btn nc-btn-primary">Start Recording</button>
+            </div>
           </div>
         `;
-        break;
       case 'recording':
-        content = `
-          <div id="nc-panel">
-            <h3>Recording...</h3>
-            <div id="timer">00:00:00</div>
-            <button id="btn-stop">Stop Meeting</button>
+        return `
+          <div id="state-recording" class="nc-content active">
+            <div style="text-align: center;">
+              <div class="nc-recording-badge">Live Recording</div>
+              <div id="timer" class="nc-timer">00:00:00</div>
+              <button id="btn-stop" class="nc-btn nc-btn-danger">Stop Meeting</button>
+            </div>
           </div>
         `;
-        break;
       case 'processing':
-        content = `
-          <div id="nc-panel">
-            <h3>Finalizing...</h3>
-            <p class="status">Generating meeting notes...</p>
+        return `
+          <div id="state-processing" class="nc-content active">
+            <div style="text-align: center;">
+              <p class="nc-title">Orchestrating Notes</p>
+              <div class="nc-progress-container"><div class="nc-progress-bar"></div></div>
+              <p class="nc-status" style="font-size: 11px;">Synthesizing AI insights...</p>
+            </div>
           </div>
         `;
-        break;
       case 'ready':
-        content = `
-          <div id="nc-panel">
-            <h3>Notes Ready!</h3>
-            <button id="btn-download">Download DOCX</button>
-            <button id="btn-reset" style="background:#333; color:white;">Start New</button>
+        return `
+          <div id="state-ready" class="nc-content active">
+            <div style="text-align: center;">
+              <p class="nc-title" style="color: white;">Notes Ready!</p>
+              <button id="btn-download" class="nc-btn nc-btn-success">Download DOCX</button>
+              <button id="btn-reset" class="nc-btn nc-btn-danger" style="background:transparent">New Session</button>
+            </div>
           </div>
         `;
-        break;
-      case 'error':
-        content = `
-          <div id="nc-panel">
-            <h3 style="color:#ef4444">Error</h3>
-            <p class="status">${data.error || 'Something went wrong.'}</p>
-            <button id="btn-reset">Retry</button>
-          </div>
-        `;
-        break;
-    }
-
-    container.innerHTML = styles + content;
-
-    // Re-attach listeners
-    if (shadowRoot.getElementById('btn-start')) shadowRoot.getElementById('btn-start').onclick = startRecording;
-    if (shadowRoot.getElementById('btn-stop')) shadowRoot.getElementById('btn-stop').onclick = stopRecording;
-    if (shadowRoot.getElementById('btn-download')) {
-      shadowRoot.getElementById('btn-download').onclick = () => {
-        window.open(`${BACKEND_URL}/download/${currentSession}`);
-      };
-    }
-    if (shadowRoot.getElementById('btn-reset')) {
-      shadowRoot.getElementById('btn-reset').onclick = () => updateUI('idle');
+      default:
+        return `<div class="nc-content active"><p class="nc-status">Something went wrong.</p></div>`;
     }
   }
 
-  /**
-   * Starts the recording process with merged audio.
-   */
+  function attachListeners(state) {
+    const btnStart = shadowRoot.getElementById('btn-start');
+    const btnStop = shadowRoot.getElementById('btn-stop');
+    const btnDownload = shadowRoot.getElementById('btn-download');
+    const btnReset = shadowRoot.getElementById('btn-reset');
+    const minimizeBtn = shadowRoot.getElementById('nc-minimize');
+    const bubble = shadowRoot.getElementById('nc-bubble');
+
+    if (btnStart) btnStart.onclick = startRecording;
+    if (btnStop) btnStop.onclick = stopRecording;
+    if (btnDownload) btnDownload.onclick = () => window.open(`${BACKEND_URL}/download/${currentSession}`);
+    if (btnReset) btnReset.onclick = () => updateUI('idle');
+    
+    if (minimizeBtn) minimizeBtn.onclick = (e) => { e.stopPropagation(); toggleMinimize(); };
+    
+    // Bubble click to restore
+    widget.onclick = (e) => {
+      if (widget.classList.contains('minimized')) {
+        toggleMinimize();
+      }
+    };
+  }
+
+  // ── WIDGET BEHAVIOR ──────────────────────────────────────────
+
+  function toggleMinimize() {
+    const isMinimized = widget.classList.toggle('minimized');
+    safeStorageSet({ nc_minimized: isMinimized });
+    
+    // Fix position after transition
+    const rect = widget.getBoundingClientRect();
+    widget.style.left = `${rect.left}px`;
+    widget.style.top = `${rect.top}px`;
+    widget.style.right = 'auto';
+  }
+
+  function initWidgetPosition() {
+    safeStorageGet(['nc_pos', 'nc_minimized'], (data) => {
+      if (data.nc_pos) {
+        widget.style.top = `${data.nc_pos.top}px`;
+        widget.style.left = `${data.nc_pos.left}px`;
+      } else {
+        widget.style.top = '20px';
+        widget.style.right = '20px';
+      }
+      if (data.nc_minimized) widget.classList.add('minimized');
+    });
+  }
+
+  function initDraggable() {
+    const dragHandle = shadowRoot.getElementById('nc-drag-handle');
+    let isDragging = false;
+    let startX, startY, initialX, initialY;
+
+    widget.onmousedown = (e) => {
+      const isMinimized = widget.classList.contains('minimized');
+      const isHeader = dragHandle.contains(e.target) && !e.target.closest('.nc-action-btn');
+      
+      if (!isMinimized && !isHeader) return;
+
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = widget.getBoundingClientRect();
+      initialX = rect.left;
+      initialY = rect.top;
+      widget.style.transition = 'none';
+      
+      const onMouseMove = (me) => {
+        if (!isDragging) return;
+        let nx = initialX + (me.clientX - startX);
+        let ny = initialY + (me.clientY - startY);
+        
+        // Edge snapping
+        const s = 15;
+        const pad = 10;
+        if (nx < s) nx = pad;
+        if (ny < s) ny = pad;
+        if (window.innerWidth - (nx + widget.offsetWidth) < s) nx = window.innerWidth - widget.offsetWidth - pad;
+        if (window.innerHeight - (ny + widget.offsetHeight) < s) ny = window.innerHeight - widget.offsetHeight - pad;
+
+        widget.style.left = `${nx}px`;
+        widget.style.top = `${ny}px`;
+        widget.style.right = 'auto';
+      };
+
+      const onMouseUp = () => {
+        isDragging = false;
+        widget.style.transition = '';
+        const rect = widget.getBoundingClientRect();
+        safeStorageSet({ nc_pos: { top: rect.top, left: rect.left } });
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+      
+      e.preventDefault();
+    };
+  }
+
+  // ── RECORDING LOGIC ──────────────────────────────────────────
+
   async function startRecording() {
     currentSession = crypto.randomUUID();
     chunkIndex = 0;
@@ -203,228 +329,113 @@
     recordingStart = Date.now();
 
     try {
-      console.log('🎤 Initializing microphone...');
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true }
-      });
-
-      console.log('🖥️ Requesting tab audio...');
-      tabStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: { echoCancellation: true, noiseSuppression: true }
-      });
-
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tabStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       const tabAudioTrack = tabStream.getAudioTracks()[0];
-      if (!tabAudioTrack) {
-        throw new Error('Please share tab audio! Select this tab and check "Share tab audio".');
-      }
-
-      // Stop video track as we only need audio
       tabStream.getVideoTracks().forEach(t => t.stop());
 
-      console.log('🔊 Merging audio streams...');
+      if (!tabAudioTrack) throw new Error('Tab audio not shared.');
+
       audioCtx = new AudioContext();
       const destination = audioCtx.createMediaStreamDestination();
-
+      audioCtx.createMediaStreamSource(new MediaStream([tabAudioTrack])).connect(destination);
       const micSource = audioCtx.createMediaStreamSource(micStream);
-      const tabSource = audioCtx.createMediaStreamSource(new MediaStream([tabAudioTrack]));
-
-      // Connect both to destination
-      micSource.connect(destination);
-      tabSource.connect(destination);
+      const gain = audioCtx.createGain(); gain.gain.value = 1.5;
+      micSource.connect(gain); gain.connect(destination);
 
       audioStream = destination.stream;
-      tabAudioTrack.onended = () => stopRecording();
+      tabAudioTrack.onended = stopRecording;
 
       updateUI('recording');
       startTimer();
-
-      // Start capturing chunks
-      setTimeout(recordChunk, 1000);
       chunkInterval = setInterval(recordChunk, CHUNK_INTERVAL_MS);
-
-      console.log('🚀 Recording started (Merged Tab + Mic).');
+      setTimeout(recordChunk, 1000);
 
     } catch (err) {
-      console.error('❌ Start failed:', err);
+      console.error(err);
       isRecording = false;
-      
-      let errorMsg = err.message;
-      if (errorMsg.includes('context invalidated')) {
-        errorMsg = 'Extension updated. Please refresh this page to continue.';
-      }
-      
-      updateUI('error', { error: errorMsg });
-      cleanupStreams();
+      updateUI('idle');
+      alert(err.message);
     }
   }
 
-  /**
-   * Records a single chunk of the merged stream.
-   */
   function recordChunk() {
     if (!audioStream || !isRecording) return;
-
     const index = chunkIndex++;
     const recorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
     const chunks = [];
-
-    recorder.ondataavailable = e => e.data.size > 0 && chunks.push(e.data);
+    recorder.ondataavailable = e => chunks.push(e.data);
     recorder.onstop = async () => {
-      if (chunks.length > 0) {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        uploadChunk(blob, index);
-      }
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const buffer = await blob.arrayBuffer();
+      try {
+        if (chrome.runtime && chrome.runtime.id) {
+          chrome.runtime.sendMessage({
+            action: 'UPLOAD_CHUNK_DATA',
+            sessionId: currentSession,
+            chunkIndex: index,
+            timeline: JSON.stringify(speakerTimeline),
+            participants: JSON.stringify(participants),
+            audio: new Uint8Array(buffer)
+          });
+        }
+      } catch (e) { console.warn("Message sending failed."); }
     };
-
     recorder.start();
-    setTimeout(() => {
-      if (recorder.state === 'recording') recorder.stop();
-    }, CHUNK_INTERVAL_MS - 100); 
+    setTimeout(() => recorder.state === 'recording' && recorder.stop(), CHUNK_INTERVAL_MS - 200);
     mediaRecorder = recorder;
   }
 
-  /**
-   * Uploads the merged chunk to the background script.
-   */
-  async function uploadChunk(blob, index) {
-    const buffer = await blob.arrayBuffer();
-
-    chrome.runtime.sendMessage({
-      action: 'UPLOAD_CHUNK_DATA',
-      sessionId: currentSession,
-      chunkIndex: index,
-      timeline: JSON.stringify(speakerTimeline),
-      participants: JSON.stringify(participants),
-      audio: new Uint8Array(buffer) // Combined stream
-    });
-
-    console.log(`📤 Chunk ${index} (merged) sent for upload.`);
-  }
-
-  /**
-   * Stops recording and finalizes the session.
-   */
   async function stopRecording() {
     if (!isRecording) return;
     isRecording = false;
-
     clearInterval(chunkInterval);
     stopTimer();
     updateUI('processing');
-
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop();
-    }
-    
+    mediaRecorder?.stop();
     cleanupStreams();
 
-    console.log('🛑 Recording stopped. Finalizing...');
-
     try {
-      const response = await fetch(`${BACKEND_URL}/finalize`, {
+      await fetch(`${BACKEND_URL}/finalize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: currentSession,
-          participants: participants,
-          speaker_timeline: speakerTimeline
-        })
+        body: JSON.stringify({ session_id: currentSession, participants, speaker_timeline: speakerTimeline })
       });
-
-      if (response.ok) {
-        console.log('✅ Finalize successful.');
-        startPolling();
-      } else {
-        throw new Error('Finalize failed on server.');
-      }
+      startPolling();
     } catch (err) {
-      console.error('❌ Finalize failed:', err);
-      updateUI('error', { error: 'Failed to finalize meeting notes.' });
+      updateUI('idle');
     }
   }
 
   function cleanupStreams() {
-    if (micStream) micStream.getTracks().forEach(t => t.stop());
-    if (tabStream) tabStream.getTracks().forEach(t => t.stop());
-    if (audioCtx) audioCtx.close();
-    micStream = null;
-    tabStream = null;
-    audioCtx = null;
+    [micStream, tabStream].forEach(s => s?.getTracks().forEach(t => t.stop()));
+    audioCtx?.close();
   }
 
-  /**
-   * Polls the backend for processing status.
-   */
   function startPolling() {
     const pollId = setInterval(async () => {
-      try {
-        const res = await fetch(`${BACKEND_URL}/status?session_id=${currentSession}`);
-        const data = await res.json();
-
-        if (data.status === 'ready') {
-          clearInterval(pollId);
-          updateUI('ready');
-        } else if (data.status === 'failed') {
-          clearInterval(pollId);
-          updateUI('error', { error: 'Processing failed.' });
-        }
-      } catch (err) {
-        console.warn('⚠️ Poll failed:', err);
-      }
+      const res = await fetch(`${BACKEND_URL}/status?session_id=${currentSession}`);
+      const data = await res.json();
+      if (data.status === 'ready') { clearInterval(pollId); updateUI('ready'); }
     }, POLL_INTERVAL);
   }
 
-  /**
-   * Timer management.
-   */
   function startTimer() {
     elapsedSeconds = 0;
     timerInterval = setInterval(() => {
       elapsedSeconds++;
-      const h = String(Math.floor(elapsedSeconds / 3600)).padStart(2, '0');
       const m = String(Math.floor((elapsedSeconds % 3600) / 60)).padStart(2, '0');
       const s = String(elapsedSeconds % 60).padStart(2, '0');
+      const h = String(Math.floor(elapsedSeconds / 3600)).padStart(2, '0');
       const timerEl = shadowRoot.getElementById('timer');
+      const bubbleTimerEl = shadowRoot.getElementById('bubble-timer');
       if (timerEl) timerEl.textContent = `${h}:${m}:${s}`;
+      if (bubbleTimerEl) bubbleTimerEl.textContent = `${m}:${s}`;
     }, 1000);
   }
 
-  function stopTimer() {
-    clearInterval(timerInterval);
-  }
+  function stopTimer() { clearInterval(timerInterval); }
 
-  /**
-   * Safe message sending with retry logic.
-   */
-  async function sendMessageSafe(message, retries = 3) {
-    for (let i = 0; i < retries; i++) {
-      try {
-        return await chrome.runtime.sendMessage(message);
-      } catch (err) {
-        if (i === retries - 1) throw err;
-        await new Promise(r => setTimeout(r, 200 * (i + 1)));
-      }
-    }
-  }
-
-  // Handle messages from the background script
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.action === 'TOGGLE_OVERLAY') {
-      const panel = shadowRoot.getElementById('nc-panel');
-      if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-    }
-  });
-
-  // Initialization
-  function init() {
-    injectUI();
-    startScraping();
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
+  injectUI();
+  startScraping();
 })();
