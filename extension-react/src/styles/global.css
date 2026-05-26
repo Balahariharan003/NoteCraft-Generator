@@ -1,0 +1,407 @@
+/* ═══════════════════════════════════════════════════════════════
+   NoteCraft AI — Widget Styles  (v3 — single-tree, no glassmorphism)
+   Both FAB and card are always in the DOM.
+   Visibility is toggled by --visible / --hidden modifier classes.
+═══════════════════════════════════════════════════════════════ */
+
+/* ── Design Tokens ────────────────────────────────────────── */
+:root, :host {
+  --nc-bg-card:      #0f172a;
+  --nc-bg-header:    #1e293b;
+  --nc-bg-body:      #0f172a;
+  --nc-border:       #1e293b;
+  --nc-text:         #ffffff;
+  --nc-muted:        #94a3b8;
+  --nc-accent:       #6366f1;
+  --nc-accent-2:     #8b5cf6;
+  --nc-accent-h:     #4f46e5;
+  --nc-danger:       #ef4444;
+  --nc-danger-h:     #dc2626;
+  --nc-success:      #10b981;
+  --nc-r-card:       12px;
+  --nc-r-btn:        8px;
+  --nc-shadow:       0 12px 40px rgba(0,0,0,0.45);
+  --nc-fab-sz:       68px;
+}
+
+/* ── Scoped reset ─────────────────────────────────────────── */
+.nc-widget *, .nc-widget *::before, .nc-widget *::after,
+.nc-fab    *, .nc-fab    *::before, .nc-fab    *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Prevent text selection anywhere inside the widget */
+.nc-widget, .nc-fab {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ════════════════════════════════════════════════════════════
+   EXPANDED CARD
+════════════════════════════════════════════════════════════ */
+.nc-widget {
+  width: 292px;
+  background-color: var(--nc-bg-card) !important;
+  border: 1px solid var(--nc-border) !important;
+  border-radius: var(--nc-r-card) !important;
+  box-shadow: var(--nc-shadow) !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  opacity: 1 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+  transition: box-shadow .25s ease, transform .2s ease;
+  /* Ensure subpixel rendering is crisp */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Hide card when minimised in widget mode */
+.nc-widget--hidden {
+  display: none !important;
+}
+
+.nc-widget:not(.nc-widget--hidden):hover {
+  box-shadow: var(--nc-shadow) !important;
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+.nc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 14px;
+  background-color: var(--nc-bg-header) !important;
+  border-bottom: 1px solid var(--nc-border) !important;
+  cursor: grab;
+  flex-shrink: 0;
+  opacity: 1 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+}
+.nc-header:active { cursor: grabbing; }
+
+.nc-logo-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Animated status dot */
+.nc-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--nc-accent);
+  flex-shrink: 0;
+}
+.nc-widget.recording .nc-dot {
+  background: var(--nc-danger);
+  animation: nc-pulse 1.4s ease-in-out infinite;
+}
+
+.nc-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--nc-text);
+  letter-spacing: .01em;
+}
+
+.nc-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nc-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--nc-muted);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.nc-action-btn:hover {
+  background-color: #334155 !important;
+  color: var(--nc-text) !important;
+}
+
+/* ── Body ───────────────────────────────────────────────── */
+.nc-body {
+  padding: 18px 16px 20px;
+  background-color: var(--nc-bg-body) !important;
+  opacity: 1 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+}
+
+.nc-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.nc-status {
+  font-size: 12.5px;
+  color: var(--nc-muted);
+  line-height: 1.6;
+}
+
+/* "Orchestrating" / "Notes Ready!" label */
+.nc-title-text {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--nc-text);
+  letter-spacing: .01em;
+}
+
+/* ── Buttons ────────────────────────────────────────────── */
+.nc-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: var(--nc-r-btn);
+  border: none;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: .01em;
+  transition: background .18s, transform .1s, box-shadow .18s;
+}
+.nc-btn:active { transform: scale(.97); }
+
+.nc-btn-primary {
+  background-color: var(--nc-accent) !important;
+  color: #fff !important;
+}
+.nc-btn-primary:hover {
+  background-color: var(--nc-accent-h) !important;
+}
+
+.nc-btn-danger {
+  background-color: var(--nc-danger) !important;
+  color: #fff !important;
+}
+.nc-btn-danger:hover {
+  background-color: var(--nc-danger-h) !important;
+}
+
+.nc-btn-success {
+  background-color: var(--nc-success) !important;
+  color: #fff !important;
+}
+.nc-btn-success:hover { filter: brightness(1.1); }
+
+.nc-btn-ghost {
+  background: transparent;
+  border: 1px solid var(--nc-border);
+  color: var(--nc-muted);
+}
+.nc-btn-ghost:hover {
+  background: #1e293b !important;
+  color: var(--nc-text) !important;
+}
+
+/* ── Recording UI ───────────────────────────────────────── */
+.nc-recording-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #2d161a !important;
+  border: 1px solid #ef4444 !important;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nc-danger) !important;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  opacity: 1 !important;
+}
+
+.nc-timer {
+  font-size: 30px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+  color: var(--nc-text);
+  font-family: 'SF Mono', 'Fira Code', 'Roboto Mono', monospace;
+  background-color: transparent !important; /* Text parent */
+}
+
+/* ── Progress bar ───────────────────────────────────────── */
+.nc-progress-container { width: 100%; }
+
+.nc-progress-bar {
+  height: 3px;
+  background: #1e293b !important;
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 6px 0;
+}
+
+.nc-progress-inner {
+  height: 100%;
+  width: 40%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--nc-accent), var(--nc-accent-2));
+  animation: nc-slide 1.6s ease-in-out infinite;
+}
+
+/* ── Spinner ────────────────────────────────────────────── */
+.nc-spin {
+  color: var(--nc-accent);
+  animation: nc-rotate 1s linear infinite;
+}
+
+/* ════════════════════════════════════════════════════════════
+   MINIMISED FAB BUBBLE
+   Always in DOM; shown/hidden by nc-fab--visible / nc-fab--hidden
+════════════════════════════════════════════════════════════ */
+.nc-fab {
+  /* Position is set inline from JS */
+  position: fixed;
+  z-index: 2147483647;          /* must equal widget z-index */
+
+  width:  var(--nc-fab-sz);
+  height: var(--nc-fab-sz);
+  border-radius: 50%;
+
+  /* Solid dark navy background with solid border and clean shadow */
+  background-color: var(--nc-bg-card) !important;
+  border: 1px solid var(--nc-border) !important;
+  box-shadow: var(--nc-shadow) !important;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+
+  cursor: move;
+  opacity: 1 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+
+  /* Allow the pulsing ring to overflow the circle */
+  overflow: visible;
+}
+
+/* ── Visibility states ────────────────────────────────── */
+.nc-fab--hidden {
+  display: none !important;
+}
+
+.nc-fab--visible {
+  display: flex !important;
+  pointer-events: auto;
+}
+
+/* ── Hover (only when visible) ────────────────────────── */
+.nc-fab--visible:hover {
+  transform: scale(1.05) !important;
+  box-shadow: var(--nc-shadow) !important;
+}
+
+.nc-fab--visible:active {
+  transform: scale(.95);
+  cursor: grabbing;
+}
+
+/* ── Recording ring ───────────────────────────────────── */
+.nc-fab-ring {
+  position: absolute;
+  /* Use inset so ring sits just outside the circle */
+  top:    -6px;
+  left:   -6px;
+  right:  -6px;
+  bottom: -6px;
+  border-radius: 50%;
+  border: 2.5px solid #ef4444 !important;
+  animation: nc-ring 1.4s ease-out infinite;
+  pointer-events: none;
+}
+
+/* ── Logo dot ─────────────────────────────────────────── */
+.nc-fab-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #ffffff !important;
+  box-shadow: none !important;
+  flex-shrink: 0;
+}
+
+.nc-fab--recording .nc-fab-dot {
+  background: #ef4444 !important;
+  box-shadow: none !important;
+  animation: nc-pulse 1.4s ease-in-out infinite;
+}
+
+/* ── Timer label ──────────────────────────────────────── */
+.nc-fab-timer {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffffff !important;
+  font-variant-numeric: tabular-nums;
+  font-family: 'SF Mono', 'Fira Code', 'Roboto Mono', monospace;
+  letter-spacing: .03em;
+  line-height: 1;
+}
+
+/* ── Keyframes ────────────────────────────────────────── */
+@keyframes nc-pulse {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+@keyframes nc-ring {
+  0%   { transform: scale(1); }
+  100% { transform: scale(1.25); }
+}
+
+@keyframes nc-slide {
+  0%   { transform: translateX(-200%); }
+  100% { transform: translateX(350%); }
+}
+
+@keyframes nc-rotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── Popup-mode overrides ─────────────────────────────── */
+body {
+  background: var(--nc-bg-card);
+  color: var(--nc-text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  width: 300px;
+  overflow: hidden;
+}
+
+/* Card in popup fills the popup width with no floating chrome */
+.nc-widget:not([style*="position: fixed"]) {
+  width: 100%;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}

@@ -4,3 +4,8 @@ __pycache__/
 .venv/
 backend/outputs/
 .DS_Store
+
+# React extension dependencies and build outputs
+extension-react/node_modules/
+extension-react/dist/
+extension-react/vite.config.js.timestamp-*
