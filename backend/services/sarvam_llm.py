@@ -55,18 +55,52 @@ def _parse_json(raw: str) -> dict | None:
     if not raw:
         return None
     clean = raw.strip()
-    if clean.startswith("```"):
-        lines = clean.split("\n")
-        clean = "\n".join(lines[1:-1]) if len(lines) > 2 else clean
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
-        pass
+    
+    # Extract content between first '{' and last '}'
     try:
         start = clean.index("{")
         end   = clean.rindex("}") + 1
-        return json.loads(clean[start:end])
-    except Exception:
+        json_content = clean[start:end]
+    except ValueError:
+        return None
+
+    # Handle unescaped control characters (newlines, tabs) inside string literals inline
+    result = []
+    in_string = False
+    escape = False
+    for char in json_content:
+        if char == '"' and not escape:
+            in_string = not in_string
+            result.append(char)
+        elif char == '\\' and in_string:
+            escape = not escape
+            result.append(char)
+        else:
+            if escape:
+                escape = False
+            if char == '\n' and in_string:
+                result.append('\\n')
+            elif char == '\r' and in_string:
+                result.append('\\r')
+            elif char == '\t' and in_string:
+                result.append('\\t')
+            else:
+                result.append(char)
+    json_content = "".join(result)
+
+    # Try parsing standard JSON
+    try:
+        return json.loads(json_content)
+    except json.JSONDecodeError:
+        pass
+
+    # Try removing trailing commas before closing braces/brackets
+    import re
+    json_content_cleaned = re.sub(r',\s*([\]}])', r'\1', json_content)
+    try:
+        return json.loads(json_content_cleaned)
+    except Exception as e:
+        print(f"JSON Parsing fully failed: {e}")
         return None
 
 

@@ -69,7 +69,7 @@ def _generate_docx(data: dict, path: str):
     dept_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     run = dept_para.add_run(
-        "Department : CSE\nNandha Engineering College"
+        "Department : CSE\nCollege Name"
     )
 
     run.bold = True
