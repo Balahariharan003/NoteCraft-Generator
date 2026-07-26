@@ -81,6 +81,7 @@ npm run build
 ### 3️⃣ Backend Activation
 ```bash
 cd backend
+create a .env file 
 pip install -r requirements.txt
 # Create .env with SARVAM_API_KEY=your_key
 python run.py

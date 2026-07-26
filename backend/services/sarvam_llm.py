@@ -5,33 +5,33 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
-LLM_URL        = "https://api.sarvam.ai/v1/chat/completions"
-MODEL          = "sarvam-m"
+LLM_URL        = "http://localhost:11434/v1/chat/completions"
+MODEL          = "qwen2.5:3b"
 
 
 # ── Base LLM caller ────────────────────────────────────────────
-async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 2000) -> str:
-    if not SARVAM_API_KEY:
-        raise ValueError("SARVAM_API_KEY not found in .env")
-
+async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 2000, json_mode: bool = False) -> str:
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        # Increased timeout to 300.0s for local Ollama running on laptop GPU
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            payload = {
+                "model":       MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                "max_tokens":  max_tokens,
+                "temperature": 0.3,
+            }
+            if json_mode:
+                payload["response_format"] = {"type": "json_object"}
+
             response = await client.post(
                 LLM_URL,
                 headers={
-                    "api-subscription-key": SARVAM_API_KEY,
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model":       MODEL,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user",   "content": user_prompt},
-                    ],
-                    "max_tokens":  max_tokens,
-                    "temperature": 0.3,
-                },
+                json=payload,
             )
 
         if response.status_code != 200:
@@ -154,7 +154,7 @@ async def aggregate_block(chunk_summaries: list, block_index: int) -> str:
     return await _call_llm(system, user)
 
 
-# ── JOB 3b: Generate class notes ──────────────────────────────
+# ── JOB 3b: Generate Minutes of Meeting (MoM) ─────────────────
 async def generate_mom(
     block_summaries: list,
     participants:    list,
@@ -162,82 +162,88 @@ async def generate_mom(
 ) -> dict:
 
     system = (
-        "You are an expert class note taker for online sessions. "
-        "Generate structured class notes from the given session summaries. "
-        "Return ONLY valid JSON — no markdown, no code blocks, no extra text.\n\n"
+        "You are an expert Minute Taker and Documentation Specialist for any professional domain "
+        "(Corporate, Academic, Medical, Legal, Government, Non-Profit, Tech, Sports, etc.). "
+        "Analyze the provided meeting summaries and generate structured Minutes of Meeting (MoM). "
+        "Return ONLY valid JSON — no markdown code fences, no extra conversational text.\n\n"
 
         "CRITICAL RULES:\n"
-        "1. Include a section ONLY if actual content exists for it in the transcript.\n"
-        "2. If a section has no content — set it to null. Do NOT include empty arrays.\n"
-        "3. Every string must be a complete sentence or phrase, never a single character.\n\n"
+        "1. Automatically infer the domain and context of the meeting from the content.\n"
+        "2. Structure discussion points under 2 to 5 clear, formal Category names relevant to what was discussed.\n"
+        "3. Pair each category in 'points_discussed' with a corresponding item in 'responsibility_matrix' specifying who is responsible and the target date.\n"
+        "4. Summarize non-actionable announcements or general notices under 'information_items'.\n"
+        "5. Provide contextually appropriate distribution lists: 'copy_to' (operational team/attendees) and 'copy_submitted_to' (higher management/oversight bodies/executives).\n"
+        "6. Provide appropriate signatory details ('signatory_name', 'signatory_designation').\n\n"
 
-        "The JSON must use exactly these keys (all optional except date and session_title):\n"
-        "  session_title       → string: descriptive title of what was taught\n"
-        "  course_name         → string or null\n"
-        "  subject_topic       → string or null: main subject area\n"
-        "  date                → string: session date\n"
-        "  time                → string or null\n"
-        "  platform            → string: always 'Google Meet'\n"
-        "  instructor_name     → string or null: name of instructor if mentioned\n"
-        "  session_overview    → array of strings or null: 2-4 sentence overview\n"
-        "  learning_objectives → array of strings or null: what students should learn\n"
-        "  topics_covered      → array of objects or null: each object has:\n"
-        "                          name (string), explanation (string), \n"
-        "                          key_points (array of strings), \n"
-        "                          examples (array of strings), \n"
-        "                          important_notes (string)\n"
-        "  concepts            → array of objects or null: each object has:\n"
-        "                          name, definition, explanation, real_example\n"
-        "  examples            → array of objects or null: each has:\n"
-        "                          question, solution_steps, final_answer\n"
-        "  key_takeaways       → array of strings or null: most important points\n"
-        "  formulas_definitions→ array of strings or null: any formulas or definitions\n"
-        "  questions_answers   → array of objects or null: each has question and answer\n"
-        "  assignments         → array of strings or null: homework or tasks given\n"
-        "  study_resources     → array of strings or null: books, links, slides mentioned\n"
-        "  additional_notes    → array of strings or null: tips, common mistakes\n"
-        "  revision_summary    → array of strings or null: 3-5 ultra-short recall points\n"
+        "The JSON MUST follow exactly this schema structure:\n"
+        "{\n"
+        '  "session_title": "Descriptive Meeting Title",\n'
+        '  "meeting_no": "2026-07",\n'
+        '  "date": "YYYY-MM-DD",\n'
+        '  "time": "10:00 AM - 11:30 AM",\n'
+        '  "venue_platform": "Google Meet",\n'
+        '  "members_present": ["Name (Role)", "Name 2 (Role)"],\n'
+        '  "points_discussed": [\n'
+        '    {\n'
+        '      "category_name": "Category 1 Name",\n'
+        '      "points": ["Formal point 1", "Formal point 2"]\n'
+        '    }\n'
+        '  ],\n'
+        '  "responsibility_matrix": [\n'
+        '    {\n'
+        '      "category_name": "Category 1 Name",\n'
+        '      "responsibility": "Designated Person or Team",\n'
+        '      "target_date": "DD.MM.YYYY or Continuous"\n'
+        '    }\n'
+        '  ],\n'
+        '  "information_items": [\n'
+        '    "Informational notice 1",\n'
+        '    "Informational notice 2"\n'
+        '  ],\n'
+        '  "copy_to": ["Recipient 1", "Recipient 2"],\n'
+        '  "copy_submitted_to": ["Higher Authority 1", "Higher Authority 2"],\n'
+        '  "signatory_name": "Name of Secretary / Convener",\n'
+        '  "signatory_designation": "Designation / Role",\n'
+        '  "signature_date": "YYYY-MM-DD"\n'
+        "}"
     )
 
     summaries_text = "\n\n".join(
         [f"Block {i+1}:\n{s}" for i, s in enumerate(block_summaries)]
     )
     user = (
-        f"Session date: {meeting_date}\n"
-        f"Participants: {', '.join(participants) if participants else 'Unknown'}\n\n"
-        f"Class session summaries:\n{summaries_text}\n\n"
-        f"Generate the class notes JSON now. "
-        f"Only include sections where actual content was discussed. "
-        f"Set all other sections to null."
+        f"Meeting date: {meeting_date}\n"
+        f"Scraped Attendees: {', '.join(participants) if participants else 'Participants'}\n\n"
+        f"Meeting summaries:\n{summaries_text}\n\n"
+        f"Generate the Minutes of Meeting JSON now following the exact schema required."
     )
 
-    raw    = await _call_llm(system, user, max_tokens=2000)
+    raw    = await _call_llm(system, user, max_tokens=2000, json_mode=True)
     parsed = _parse_json(raw)
 
     if parsed:
-        # Ensure date is set
         if not parsed.get("date"):
             parsed["date"] = meeting_date
-        if not parsed.get("platform"):
-            parsed["platform"] = "Google Meet"
-        parsed["prepared_by"] = "Notes Generator"
+        if not parsed.get("venue_platform"):
+            parsed["venue_platform"] = "Google Meet"
+        if not parsed.get("members_present") and participants:
+            parsed["members_present"] = participants
         return parsed
 
-    print("Failed to parse class notes JSON — using fallback")
+    print("Failed to parse MoM JSON — using fallback template")
     return _fallback_notes(participants, meeting_date)
 
 
 # ── JOB 4: Refinement pass ────────────────────────────────────
 async def refine_mom(mom_json: dict) -> dict:
     system = (
-        "You are a professional editor for class notes. "
-        "Improve the given class notes JSON. "
-        "Fix grammar, remove duplicate points, improve clarity. "
-        "Keep null values as null — do not add empty content. "
-        "Return ONLY valid JSON with the same structure. No extra text, no markdown."
+        "You are a professional executive Minute Editor. "
+        "Refine and improve the given Minutes of Meeting (MoM) JSON. "
+        "Ensure formal tone, remove duplicate points, fix grammar, and maintain valid JSON structure matching the schema. "
+        "Return ONLY valid JSON. No markdown code blocks, no extra text."
     )
-    user   = f"Refine this class notes JSON:\n\n{json.dumps(mom_json, indent=2)}"
-    raw    = await _call_llm(system, user, max_tokens=2000)
+    user   = f"Refine this MoM JSON:\n\n{json.dumps(mom_json, indent=2)}"
+    raw    = await _call_llm(system, user, max_tokens=2000, json_mode=True)
     parsed = _parse_json(raw)
     return parsed if parsed else mom_json
 
@@ -245,10 +251,32 @@ async def refine_mom(mom_json: dict) -> dict:
 # ── Fallback ───────────────────────────────────────────────────
 def _fallback_notes(participants: list, date: str) -> dict:
     return {
-        "session_title":    "Class Session Notes",
-        "date":             date,
-        "platform":         "Google Meet",
-        "prepared_by":      "Notes Generator",
-        "session_overview": ["Class content could not be extracted from the recording."],
-        "key_takeaways":    ["Please review the recording manually."],
-    }
+        "session_title":       "Minutes of the Meeting",
+        "meeting_no":          f"{date[:7]}/01" if date else "2026-07/01",
+        "date":                date,
+        "time":                "Scheduled Session",
+        "venue_platform":      "Google Meet",
+        "members_present":     participants if participants else ["Attendees"],
+        "points_discussed": [
+            {
+                "category_name": "General Discussion",
+                "points": ["The team conducted a meeting review. Please refer to recording for complete transcript."]
+            }
+        ],
+        "responsibility_matrix": [
+            {
+                "category_name": "General Discussion",
+                "responsibility": "All Members",
+                "target_date": "Continuous"
+            }
+        ],
+        "information_items": [
+            "Session recorded and archived automatically.",
+            "Further details will be circulated in due course."
+        ],
+        "copy_to":             ["All Meeting Attendees"],
+        "copy_submitted_to":   ["Management / Department Head"],
+        "signatory_name":      "Meeting Secretary",
+        "signatory_designation": "Convener",
+        "signature_date":      date,
+    }

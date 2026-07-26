@@ -49,341 +49,294 @@ def _generate_docx(data: dict, path: str):
 
     # PAGE SETTINGS
     section = doc.sections[0]
-
-    section.top_margin = Pt(40)
-    section.bottom_margin = Pt(40)
-    section.left_margin = Pt(40)
-    section.right_margin = Pt(40)
+    section.top_margin = Pt(45)
+    section.bottom_margin = Pt(45)
+    section.left_margin = Pt(50)
+    section.right_margin = Pt(50)
 
     # FOOTER
     footer = section.footer
     footer_para = footer.paragraphs[0]
     footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
     _add_page_number(footer_para)
 
     # ─────────────────────────────────────────
-    # HEADER TEXT
-    # ─────────────────────────────────────────
-    dept_para = doc.add_paragraph()
-    dept_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-
-    run = dept_para.add_run(
-        "Department : CSE\nCollege Name"
-    )
-
-    run.bold = True
-    run.font.size = Pt(10)
-
-    # ─────────────────────────────────────────
-    # HEADER TABLE
-    # ─────────────────────────────────────────
-    table = doc.add_table(rows=3, cols=6)
-    table.style = "Table Grid"
-
-    def set_cell(r, c, text, bold=False, center=False):
-
-        cell = table.cell(r, c)
-        cell.text = str(text)
-
-        para = cell.paragraphs[0]
-
-        if center:
-            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        run = para.runs[0]
-        run.font.size = Pt(9)
-
-        if bold:
-            run.bold = True
-
-    # ROW 1
-    set_cell(0, 0, "Name of the\nMeeting", True)
-
-    meeting_title = (
-        data.get("session_title")
-        or data.get("title")
-        or "Faculty Meeting"
-    )
-
-    meeting_cell = table.cell(0, 1).merge(table.cell(0, 2))
-    meeting_cell.text = str(meeting_title)
-    meeting_cell.paragraphs[0].runs[0].font.size = Pt(9)
-
-    set_cell(0, 3, "Number", True)
-
-    num_cell = table.cell(0, 4).merge(table.cell(0, 5))
-    num_cell.text = f"2025-26/ {datetime.now().strftime('%m')}"
-    num_cell.paragraphs[0].runs[0].font.size = Pt(9)
-
-    # ROW 2
-    set_cell(1, 0, "Date", True)
-
-    set_cell(
-        1,
-        1,
-        datetime.now().strftime("%Y-%m-%d")
-    )
-
-    set_cell(1, 2, "Time", True)
-
-    set_cell(
-        1,
-        3,
-        data.get("time") or "None"
-    )
-
-    set_cell(1, 4, "Venue", True)
-
-    set_cell(
-        1,
-        5,
-        data.get("venue")
-        or "Block III – Staff Floor Cabin"
-    )
-
-    # ROW 3
-    set_cell(2, 0, "Members Present", True)
-
-    members_cell = table.cell(2, 1).merge(
-        table.cell(2, 5)
-    )
-
-    participants = data.get("participants") or []
-
-    if isinstance(participants, list) and participants:
-
-        members_cell.text = ", ".join(
-            [str(p) for p in participants if p]
-        )
-
-    else:
-        members_cell.text = "HoD and All faculty members"
-
-    members_cell.paragraphs[0].runs[0].font.size = Pt(9)
-
-    doc.add_paragraph()
-
-    # ─────────────────────────────────────────
-    # TITLE
+    # 1. MAIN TITLE
     # ─────────────────────────────────────────
     title_para = doc.add_paragraph()
     title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    run = title_para.add_run(
-        "Minutes of the Meeting"
-    )
-
+    run = title_para.add_run("Minutes of the Meeting")
     run.bold = True
-    run.font.size = Pt(12)
-    run.underline = True
-
-    doc.add_paragraph()
+    run.font.size = Pt(16)
+    title_para.paragraph_format.space_after = Pt(14)
 
     # ─────────────────────────────────────────
-    # MAIN TABLE
+    # 2. METADATA TABLE (2 COLUMNS)
     # ─────────────────────────────────────────
-    mom_table = doc.add_table(rows=1, cols=4)
-    mom_table.style = "Table Grid"
+    meta_table = doc.add_table(rows=5, cols=2)
+    meta_table.style = "Table Grid"
 
-    headers = [
-        "Category",
-        "Points Discussed",
-        "Responsibility",
-        "Target Date"
+    meeting_title  = data.get("session_title") or "Meeting Review"
+    meeting_no     = data.get("meeting_no") or f"{datetime.now().strftime('%Y-%m')}/01"
+    meeting_date   = data.get("date") or datetime.now().strftime("%d.%m.%Y")
+    meeting_time   = data.get("time") or "Scheduled Session"
+    venue_platform = data.get("venue_platform") or "Google Meet"
+
+    meta_rows = [
+        ("Meeting Title",       meeting_title),
+        ("Meeting No.",         meeting_no),
+        ("Date",                meeting_date),
+        ("Time",                meeting_time),
+        ("Venue / Platform",    venue_platform),
     ]
 
-    hdr_cells = mom_table.rows[0].cells
+    for idx, (label, val) in enumerate(meta_rows):
+        row_cells = meta_table.rows[idx].cells
+        
+        # Label cell
+        row_cells[0].text = str(label)
+        p0 = row_cells[0].paragraphs[0]
+        r0 = p0.runs[0]
+        r0.bold = True
+        r0.font.size = Pt(10)
+        _set_cell_background(row_cells[0], "F2F2F2")
 
-    for i, h in enumerate(headers):
+        # Value cell
+        row_cells[1].text = str(val)
+        p1 = row_cells[1].paragraphs[0]
+        r1 = p1.runs[0]
+        r1.font.size = Pt(10)
 
-        hdr_cells[i].text = h
-
-        para = hdr_cells[i].paragraphs[0]
-        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        run = para.runs[0]
-        run.bold = True
-        run.font.size = Pt(10)
-
-        _set_cell_background(
-            hdr_cells[i],
-            "D9D9D9"
-        )
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
 
     # ─────────────────────────────────────────
-    # CATEGORY SECTION
+    # 3. MEMBERS PRESENT
     # ─────────────────────────────────────────
-    categories = data.get("categories") or []
+    mem_header = doc.add_paragraph()
+    r_mem = mem_header.add_run("Members Present:")
+    r_mem.bold = True
+    r_mem.font.size = Pt(11)
+    mem_header.paragraph_format.space_after = Pt(4)
 
-    # AUTO CONVERT
-    if not categories:
+    members = data.get("members_present") or data.get("participants") or ["Attendees"]
+    if isinstance(members, str):
+        members = [members]
 
-        fallback_points = (
-            data.get("key_takeaways")
-            or data.get("information_items")
-            or []
-        )
+    for member in members:
+        p_mem = doc.add_paragraph(style="List Bullet")
+        r_m = p_mem.add_run(str(member))
+        r_m.font.size = Pt(10)
+        p_mem.paragraph_format.space_after = Pt(2)
 
-        if not isinstance(fallback_points, list):
-            fallback_points = [str(fallback_points)]
+    p_spacer = doc.add_paragraph()
+    p_spacer.paragraph_format.space_after = Pt(8)
 
-        categories = [
-            {
-                "name": "Meeting Discussion",
-                "points": fallback_points,
-                "responsibility": "All",
-                "target_date": "Continuous"
-            }
-        ]
+    # ─────────────────────────────────────────
+    # 4. POINTS DISCUSSED
+    # ─────────────────────────────────────────
+    disc_header = doc.add_paragraph()
+    r_disc = disc_header.add_run("Points Discussed")
+    r_disc.bold = True
+    r_disc.font.size = Pt(13)
+    disc_header.paragraph_format.space_after = Pt(8)
 
-    # CREATE ROWS
-    for idx, cat in enumerate(categories, start=1):
+    points_discussed = data.get("points_discussed") or []
+    
+    # Auto-convert legacy/fallback structures
+    if not points_discussed:
+        categories = data.get("categories") or []
+        if categories:
+            for cat in categories:
+                points_discussed.append({
+                    "category_name": cat.get("name") or "General Discussion",
+                    "points": cat.get("points") or ["Discussion conducted."]
+                })
+        else:
+            points_discussed = [{
+                "category_name": "General Discussion",
+                "points": ["The meeting proceedings were conducted as per agenda."]
+            }]
 
-        if not isinstance(cat, dict):
+    for cat_item in points_discussed:
+        if not isinstance(cat_item, dict):
             continue
 
-        row = mom_table.add_row()
+        cat_name = cat_item.get("category_name") or "Discussion"
+        points   = cat_item.get("points") or []
+        if isinstance(points, str):
+            points = [points]
 
-        # CATEGORY
-        category_cell = row.cells[0]
+        # Category Header
+        p_cat = doc.add_paragraph()
+        r_cname = p_cat.add_run(f"Category: {cat_name}")
+        r_cname.bold = True
+        r_cname.font.size = Pt(10.5)
+        p_cat.paragraph_format.space_before = Pt(4)
+        p_cat.paragraph_format.space_after = Pt(3)
 
-        category_name = (
-            f"{idx}. "
-            f"{cat.get('name') or 'General'}"
-        )
+        for pt in points:
+            p_pt = doc.add_paragraph(style="List Bullet")
+            r_pt = p_pt.add_run(str(pt))
+            r_pt.font.size = Pt(10)
+            p_pt.paragraph_format.space_after = Pt(2)
 
-        category_cell.text = category_name
-
-        cat_run = (
-            category_cell.paragraphs[0]
-            .runs[0]
-        )
-
-        cat_run.bold = True
-        cat_run.font.size = Pt(9)
-
-        # POINTS
-        points_cell = row.cells[1]
-
-        points = cat.get("points") or []
-
-        if not isinstance(points, list):
-            points = [str(points)]
-
-        if points:
-
-            first_para = points_cell.paragraphs[0]
-            first_para.style = "List Bullet"
-
-            first_run = first_para.add_run(
-                str(points[0])
-            )
-
-            first_run.font.size = Pt(9)
-
-            for p_text in points[1:]:
-
-                p = points_cell.add_paragraph(
-                    style="List Bullet"
-                )
-
-                r = p.add_run(str(p_text))
-                r.font.size = Pt(9)
-
-        else:
-
-            points_cell.text = (
-                "Discussion conducted."
-            )
-
-        # RESPONSIBILITY
-        res_cell = row.cells[2]
-
-        res_cell.text = str(
-            cat.get("responsibility")
-            or "All"
-        )
-
-        res_para = res_cell.paragraphs[0]
-
-        res_para.alignment = (
-            WD_ALIGN_PARAGRAPH.CENTER
-        )
-
-        res_para.runs[0].font.size = Pt(9)
-
-        # TARGET DATE
-        td_cell = row.cells[3]
-
-        td_cell.text = str(
-            cat.get("target_date")
-            or "Continuous"
-        )
-
-        td_para = td_cell.paragraphs[0]
-
-        td_para.alignment = (
-            WD_ALIGN_PARAGRAPH.CENTER
-        )
-
-        td_para.runs[0].font.size = Pt(9)
-
-    doc.add_paragraph()
+    doc.add_paragraph().paragraph_format.space_after = Pt(8)
 
     # ─────────────────────────────────────────
-    # INFORMATION ITEMS
+    # 5. RESPONSIBILITY & TARGET DATE
     # ─────────────────────────────────────────
-    info_para = doc.add_paragraph()
+    resp_header = doc.add_paragraph()
+    r_resp = resp_header.add_run("Responsibility & Target Date")
+    r_resp.bold = True
+    r_resp.font.size = Pt(13)
+    resp_header.paragraph_format.space_after = Pt(8)
 
-    run = info_para.add_run(
-        "Information Items"
-    )
+    resp_matrix = data.get("responsibility_matrix") or []
+    if not resp_matrix:
+        for cat_item in points_discussed:
+            c_name = cat_item.get("category_name") if isinstance(cat_item, dict) else "Discussion"
+            resp_matrix.append({
+                "category_name": c_name,
+                "responsibility": "All Members",
+                "target_date": "Continuous"
+            })
 
-    run.bold = True
-    run.font.size = Pt(11)
-    run.underline = True
+    resp_table = doc.add_table(rows=1, cols=3)
+    resp_table.style = "Table Grid"
 
-    info_items = (
-        data.get("information_items")
-        or data.get("key_takeaways")
-        or []
-    )
+    table_headers = ["Category", "Responsibility", "Target Date"]
+    hdr_cells = resp_table.rows[0].cells
+    for i, h in enumerate(table_headers):
+        hdr_cells[i].text = h
+        p_h = hdr_cells[i].paragraphs[0]
+        p_h.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        r_h = p_h.runs[0]
+        r_h.bold = True
+        r_h.font.size = Pt(10)
+        _set_cell_background(hdr_cells[i], "D9D9D9")
 
-    if not isinstance(info_items, list):
-        info_items = [str(info_items)]
+    for item in resp_matrix:
+        if not isinstance(item, dict):
+            continue
+
+        row_cells = resp_table.add_row().cells
+        
+        row_cells[0].text = str(item.get("category_name") or "General")
+        row_cells[1].text = str(item.get("responsibility") or "All")
+        row_cells[2].text = str(item.get("target_date") or "Continuous")
+
+        for c_idx in range(3):
+            p_c = row_cells[c_idx].paragraphs[0]
+            if len(p_c.runs) > 0:
+                p_c.runs[0].font.size = Pt(9.5)
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(10)
+
+    # ─────────────────────────────────────────
+    # 6. INFORMATION ITEMS
+    # ─────────────────────────────────────────
+    info_header = doc.add_paragraph()
+    r_info = info_header.add_run("Information Items")
+    r_info.bold = True
+    r_info.font.size = Pt(13)
+    info_header.paragraph_format.space_after = Pt(8)
+
+    info_items = data.get("information_items") or []
+    if isinstance(info_items, str):
+        info_items = [info_items]
 
     if not info_items:
-
         info_items = [
-            "Faculty members are requested to complete pending work.",
-            "Upcoming activities will be communicated shortly.",
-            "All members should follow department schedule."
+            "All members are requested to review the notes and complete assigned tasks.",
+            "Schedule for the next review session will be communicated shortly."
         ]
 
-    for item in info_items:
+    for idx, item in enumerate(info_items, start=1):
+        p_item = doc.add_paragraph()
+        r_num = p_item.add_run(f"{idx}. ")
+        r_num.bold = True
+        r_num.font.size = Pt(10)
+        r_txt = p_item.add_run(str(item))
+        r_txt.font.size = Pt(10)
+        p_item.paragraph_format.space_after = Pt(3)
 
-        p = doc.add_paragraph(
-            style="List Bullet"
-        )
-
-        r = p.add_run(str(item))
-        r.font.size = Pt(9)
+    doc.add_paragraph().paragraph_format.space_after = Pt(10)
 
     # ─────────────────────────────────────────
-    # SAVE
+    # 7. DISTRIBUTION & SIGN-OFF
     # ─────────────────────────────────────────
+    copy_to = data.get("copy_to") or ["All Members"]
+    if isinstance(copy_to, str):
+        copy_to = [copy_to]
+
+    p_ct = doc.add_paragraph()
+    r_ct = p_ct.add_run("Copy To:")
+    r_ct.bold = True
+    r_ct.font.size = Pt(10.5)
+    p_ct.paragraph_format.space_after = Pt(3)
+
+    for item in copy_to:
+        p_c = doc.add_paragraph(style="List Bullet")
+        r_c = p_c.add_run(str(item))
+        r_c.font.size = Pt(10)
+        p_c.paragraph_format.space_after = Pt(2)
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    copy_sub = data.get("copy_submitted_to") or ["Management"]
+    if isinstance(copy_sub, str):
+        copy_sub = [copy_sub]
+
+    p_csub = doc.add_paragraph()
+    r_csub = p_csub.add_run("Copy Submitted To:")
+    r_csub.bold = True
+    r_csub.font.size = Pt(10.5)
+    p_csub.paragraph_format.space_after = Pt(3)
+
+    for item in copy_sub:
+        p_cs = doc.add_paragraph(style="List Bullet")
+        r_cs = p_cs.add_run(str(item))
+        r_cs.font.size = Pt(10)
+        p_cs.paragraph_format.space_after = Pt(2)
+
+    # SIGNATURE BLOCK
+    p_sign_space = doc.add_paragraph()
+    p_sign_space.paragraph_format.space_before = Pt(16)
+    p_sign_space.paragraph_format.space_after = Pt(2)
+    
+    r_line = p_sign_space.add_run("_______________________________")
+    r_line.bold = True
+
+    sig_name = data.get("signatory_name") or "Meeting Secretary"
+    sig_desig = data.get("signatory_designation") or "Convener"
+    sig_date = data.get("signature_date") or data.get("date") or datetime.now().strftime("%d.%m.%Y")
+
+    p_sig1 = doc.add_paragraph()
+    r_s1 = p_sig1.add_run(str(sig_name))
+    r_s1.bold = True
+    r_s1.font.size = Pt(10.5)
+    p_sig1.paragraph_format.space_after = Pt(2)
+
+    p_sig2 = doc.add_paragraph()
+    r_s2 = p_sig2.add_run(str(sig_desig))
+    r_s2.italic = True
+    r_s2.font.size = Pt(10)
+    p_sig2.paragraph_format.space_after = Pt(2)
+
+    p_sig3 = doc.add_paragraph()
+    r_s3 = p_sig3.add_run(f"Date: {sig_date}")
+    r_s3.bold = True
+    r_s3.font.size = Pt(10)
+
+    # SAVE DOCUMENT
     try:
-
         doc.save(path)
-
-        print("✅ DOCX saved:", path)
-
+        print("[OK] Standard MoM DOCX saved:", path)
     except Exception as e:
-
-        print("❌ DOCX save failed:", e)
-
+        print("[ERROR] DOCX save failed:", e)
         raise
+
+
 
 
 # ─────────────────────────────────────────────
