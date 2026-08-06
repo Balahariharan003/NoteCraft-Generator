@@ -10,6 +10,9 @@ import styles from './src/styles/global.css?inline';
   if (window.notecraftInjected) return;
   window.notecraftInjected = true;
 
+  // Ensure state resets if page is refreshed mid-recording/processing
+  chrome.storage.local.set({ currentState: 'idle' });
+
   const BACKEND_URL = 'http://localhost:8000';
   const CHUNK_INTERVAL_MS = 30000;
   const POLL_INTERVAL = 2000;
@@ -180,27 +183,46 @@ import styles from './src/styles/global.css?inline';
     chrome.storage.local.set({ currentState: 'processing' });
 
     try {
-      await fetch(`${BACKEND_URL}/finalize`, {
+      const res = await fetch(`${BACKEND_URL}/finalize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: currentSession, participants, speaker_timeline: speakerTimeline })
       });
+      if (!res.ok) throw new Error('Finalize failed');
       startPolling();
     } catch (err) {
+      alert("NoteCraft Backend disconnected. Cannot finalize notes.");
       chrome.storage.local.set({ currentState: 'idle' });
     }
   }
 
   function startPolling() {
+    let failCount = 0;
     const pollId = setInterval(async () => {
       try {
         const res = await fetch(`${BACKEND_URL}/status?session_id=${currentSession}`);
+        if (!res.ok) throw new Error('Status check failed');
         const data = await res.json();
+        
         if (data.status === 'ready') { 
           clearInterval(pollId); 
           chrome.storage.local.set({ currentState: 'ready' }); 
+        } else if (data.status === 'failed') {
+          clearInterval(pollId);
+          alert("NoteCraft Backend failed to process the meeting.");
+          chrome.storage.local.set({ currentState: 'idle' });
         }
-      } catch (e) {}
+        
+        // Reset fail count if successful ping
+        failCount = 0;
+      } catch (e) {
+        failCount++;
+        if (failCount >= 3) {
+          clearInterval(pollId);
+          alert("Lost connection to NoteCraft Backend. Polling stopped.");
+          chrome.storage.local.set({ currentState: 'idle' });
+        }
+      }
     }, POLL_INTERVAL);
   }
 

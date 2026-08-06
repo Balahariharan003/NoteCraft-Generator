@@ -1,11 +1,16 @@
+import os
+from dotenv import load_dotenv
+
+# Load environment variables first
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-import os
 
 from routers import chunks, finalize, status
 
-app = FastAPI(title="Notes Generator API", version="1.0.0")
+app = FastAPI(title="NoteCraft AI Backend (GPU Accelerated)", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,4 +29,9 @@ app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
 
 @app.get("/")
 async def root():
-    return {"status": "Notes Generator API is running"}
+    return {
+        "status": "NoteCraft AI Backend is running",
+        "device": "NVIDIA GPU (CUDA:0)",
+        "stt_engine": "Whisper Medium (Local CUDA)",
+        "llm_model": os.getenv("LLM_MODEL", "llama3.1:8b"),
+    }

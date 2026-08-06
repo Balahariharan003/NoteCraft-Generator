@@ -5,9 +5,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-LLM_URL        = "http://localhost:11434/v1/chat/completions"
-MODEL          = "qwen2.5:3b"
-
+LLM_URL        = os.getenv("LLM_URL", "http://localhost:11434/v1/chat/completions")
+MODEL          = os.getenv("LLM_MODEL", "llama3.2:3b")
+OLLAMA_NUM_GPU = int(os.getenv("OLLAMA_NUM_GPU", "99"))
 
 # ── Base LLM caller ────────────────────────────────────────────
 async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 2000, json_mode: bool = False) -> str:
@@ -22,6 +22,9 @@ async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 2000
                 ],
                 "max_tokens":  max_tokens,
                 "temperature": 0.3,
+                "options": {
+                    "num_gpu": OLLAMA_NUM_GPU
+                }
             }
             if json_mode:
                 payload["response_format"] = {"type": "json_object"}
@@ -279,4 +282,4 @@ def _fallback_notes(participants: list, date: str) -> dict:
         "signatory_name":      "Meeting Secretary",
         "signatory_designation": "Convener",
         "signature_date":      date,
-    }
+    }
