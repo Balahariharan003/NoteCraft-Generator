@@ -162,24 +162,22 @@ async def generate_mom(
     block_summaries: list,
     participants:    list,
     meeting_date:    str,
+    duration_minutes: str = "Unknown",
 ) -> dict:
 
     system = (
-        "You are an expert Minute Taker and Documentation Specialist for any professional domain "
-        "(Corporate, Academic, Medical, Legal, Government, Non-Profit, Tech, Sports, etc.). "
-        "Analyze the provided meeting summaries and generate structured Minutes of Meeting (MoM). "
+        "You are an expert Minute Taker, Documentation Specialist, and Educational Note Taker. "
+        "Analyze the provided meeting summaries and determine if the session is a standard business meeting (Minutes of Meeting) OR an educational/training session (Online Session). "
         "Return ONLY valid JSON — no markdown code fences, no extra conversational text.\n\n"
 
         "CRITICAL RULES:\n"
-        "1. Automatically infer the domain and context of the meeting from the content.\n"
-        "2. Structure discussion points under 2 to 5 clear, formal Category names relevant to what was discussed.\n"
-        "3. Pair each category in 'points_discussed' with a corresponding item in 'responsibility_matrix' specifying who is responsible and the target date.\n"
-        "4. Summarize non-actionable announcements or general notices under 'information_items'.\n"
-        "5. Provide contextually appropriate distribution lists: 'copy_to' (operational team/attendees) and 'copy_submitted_to' (higher management/oversight bodies/executives).\n"
-        "6. Provide appropriate signatory details ('signatory_name', 'signatory_designation').\n\n"
+        "1. Automatically infer the domain and context of the meeting from the content. Classify it as either 'mom' or 'online_session'.\n"
+        "2. The JSON MUST have a 'document_type' field set to either 'mom' or 'online_session'.\n"
+        "3. Depending on the 'document_type', the rest of the JSON must follow the respective schema below.\n\n"
 
-        "The JSON MUST follow exactly this schema structure:\n"
+        "SCHEMA FOR 'mom':\n"
         "{\n"
+        '  "document_type": "mom",\n'
         '  "session_title": "Descriptive Meeting Title",\n'
         '  "meeting_no": "2026-07",\n'
         '  "date": "YYYY-MM-DD",\n'
@@ -208,6 +206,37 @@ async def generate_mom(
         '  "signatory_name": "Name of Secretary / Convener",\n'
         '  "signatory_designation": "Designation / Role",\n'
         '  "signature_date": "YYYY-MM-DD"\n'
+        "}\n\n"
+
+        "SCHEMA FOR 'online_session':\n"
+        "{\n"
+        '  "document_type": "online_session",\n'
+        '  "session_title": "Descriptive Session Title",\n'
+        '  "instructor": "Instructor Name (infer if possible)",\n'
+        '  "date": "YYYY-MM-DD",\n'
+        '  "duration_minutes": "Approximate duration if known, else Unknown",\n'
+        '  "platform": "Google Meet",\n'
+        '  "topics_covered": [\n'
+        '    {\n'
+        '      "topic_name": "Topic Name",\n'
+        '      "summary": "Brief summary of the topic",\n'
+        '      "key_points": ["Point 1", "Point 2"],\n'
+        '      "definitions": [\n'
+        '        {"term": "Term", "explanation": "Explanation"}\n'
+        '      ],\n'
+        '      "examples": ["Example 1", "Example 2"]\n'
+        '    }\n'
+        '  ],\n'
+        '  "doubts_and_clarifications": [\n'
+        '    {"question": "What is X?", "answer": "X is Y."}\n'
+        '  ],\n'
+        '  "assignments_and_follow_ups": [\n'
+        '    {"description": "Assignment description", "due_date": "YYYY-MM-DD or Unknown"}\n'
+        '  ],\n'
+        '  "resources_referenced": [\n'
+        '    "Resource 1", "Resource 2"\n'
+        '  ],\n'
+        '  "session_summary": "Overall summary of the entire session."\n'
         "}"
     )
 
@@ -216,7 +245,8 @@ async def generate_mom(
     )
     user = (
         f"Meeting date: {meeting_date}\n"
-        f"Scraped Attendees: {', '.join(participants) if participants else 'Participants'}\n\n"
+        f"Scraped Attendees: {', '.join(participants) if participants else 'Participants'}\n"
+        f"Meeting Duration: {duration_minutes} minutes\n\n"
         f"Meeting summaries:\n{summaries_text}\n\n"
         f"Generate the Minutes of Meeting JSON now following the exact schema required."
     )
@@ -240,12 +270,12 @@ async def generate_mom(
 # ── JOB 4: Refinement pass ────────────────────────────────────
 async def refine_mom(mom_json: dict) -> dict:
     system = (
-        "You are a professional executive Minute Editor. "
-        "Refine and improve the given Minutes of Meeting (MoM) JSON. "
-        "Ensure formal tone, remove duplicate points, fix grammar, and maintain valid JSON structure matching the schema. "
+        "You are a professional Document Editor. "
+        "Refine and improve the given JSON Document (which is either Minutes of Meeting or Online Session Notes). "
+        "Ensure professional tone, remove duplicate points, fix grammar, and strictly maintain the original JSON structure. "
         "Return ONLY valid JSON. No markdown code blocks, no extra text."
     )
-    user   = f"Refine this MoM JSON:\n\n{json.dumps(mom_json, indent=2)}"
+    user   = f"Refine this JSON:\n\n{json.dumps(mom_json, indent=2)}"
     raw    = await _call_llm(system, user, max_tokens=2000, json_mode=True)
     parsed = _parse_json(raw)
     return parsed if parsed else mom_json
@@ -254,6 +284,7 @@ async def refine_mom(mom_json: dict) -> dict:
 # ── Fallback ───────────────────────────────────────────────────
 def _fallback_notes(participants: list, date: str) -> dict:
     return {
+        "document_type":       "mom",
         "session_title":       "Minutes of the Meeting",
         "meeting_no":          f"{date[:7]}/01" if date else "2026-07/01",
         "date":                date,

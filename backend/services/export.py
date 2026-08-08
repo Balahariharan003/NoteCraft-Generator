@@ -35,7 +35,11 @@ def export_documents(mom_json: dict, session_id: str) -> tuple:
         f"{filename}.docx"
     )
 
-    _generate_docx(mom_json, docx_path)
+    doc_type = mom_json.get("document_type", "mom")
+    if doc_type == "online_session":
+        _generate_online_session_docx(mom_json, docx_path)
+    else:
+        _generate_docx(mom_json, docx_path)
 
     return None, f"/outputs/{filename}.docx"
 
@@ -431,3 +435,166 @@ def _add_page_number(paragraph):
     )
 
     run._r.append(fld_end2)
+
+# ─────────────────────────────────────────────
+# ONLINE SESSION DOCX GENERATION
+# ─────────────────────────────────────────────
+def _generate_online_session_docx(data: dict, path: str):
+    doc = Document()
+
+    # PAGE SETTINGS
+    section = doc.sections[0]
+    section.top_margin = Pt(45)
+    section.bottom_margin = Pt(45)
+    section.left_margin = Pt(50)
+    section.right_margin = Pt(50)
+
+    # FOOTER
+    footer = section.footer
+    footer_para = footer.paragraphs[0]
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _add_page_number(footer_para)
+
+    # 1. MAIN TITLE
+    title_para = doc.add_paragraph()
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    session_title = data.get("session_title") or "Session Notes"
+    run = title_para.add_run(f"{session_title} — Session Notes")
+    run.bold = True
+    run.font.size = Pt(16)
+    title_para.paragraph_format.space_after = Pt(14)
+
+    # 2. METADATA
+    meta_table = doc.add_table(rows=4, cols=2)
+    meta_table.style = "Table Grid"
+
+    meta_rows = [
+        ("Instructor", data.get("instructor") or "Unknown"),
+        ("Date", data.get("date") or datetime.now().strftime("%Y-%m-%d")),
+        ("Duration", str(data.get("duration_minutes") or "Unknown")),
+        ("Platform", data.get("platform") or "Google Meet"),
+    ]
+
+    for idx, (label, val) in enumerate(meta_rows):
+        row_cells = meta_table.rows[idx].cells
+        row_cells[0].text = str(label)
+        row_cells[0].paragraphs[0].runs[0].bold = True
+        _set_cell_background(row_cells[0], "F2F2F2")
+        row_cells[1].text = str(val)
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(10)
+
+    # 1. TOPICS COVERED
+    header_topics = doc.add_paragraph()
+    r_ht = header_topics.add_run("1. TOPICS COVERED")
+    r_ht.bold = True
+    r_ht.font.size = Pt(14)
+    header_topics.paragraph_format.space_after = Pt(6)
+
+    topics = data.get("topics_covered") or []
+    for t_idx, topic in enumerate(topics, start=1):
+        p_topic = doc.add_paragraph()
+        r_tname = p_topic.add_run(f"1.{t_idx} {topic.get('topic_name') or 'Topic'}")
+        r_tname.bold = True
+        r_tname.font.size = Pt(12)
+        
+        summary = topic.get("summary")
+        if summary:
+            p_summ = doc.add_paragraph(style="List Bullet")
+            p_summ.add_run("Summary: ").bold = True
+            p_summ.add_run(str(summary))
+        
+        key_points = topic.get("key_points") or []
+        if key_points:
+            p_kp = doc.add_paragraph(style="List Bullet")
+            p_kp.add_run("Key Points:").bold = True
+            for kp in key_points:
+                p_sub = doc.add_paragraph(style="List Bullet 2")
+                p_sub.add_run(str(kp))
+                
+        defs = topic.get("definitions") or []
+        if defs:
+            p_def = doc.add_paragraph(style="List Bullet")
+            p_def.add_run("Definitions:").bold = True
+            for d in defs:
+                p_sub = doc.add_paragraph(style="List Bullet 2")
+                term = d.get("term") or ""
+                explanation = d.get("explanation") or ""
+                r_term = p_sub.add_run(f"{term} — ")
+                r_term.bold = True
+                p_sub.add_run(str(explanation))
+
+        examples = topic.get("examples") or []
+        if examples:
+            p_ex = doc.add_paragraph(style="List Bullet")
+            p_ex.add_run("Examples / Demonstrations:").bold = True
+            for ex in examples:
+                p_sub = doc.add_paragraph(style="List Bullet 2")
+                p_sub.add_run(str(ex))
+                
+        doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    # 2. DOUBTS & CLARIFICATIONS
+    header_doubts = doc.add_paragraph()
+    r_hd = header_doubts.add_run("2. DOUBTS & CLARIFICATIONS")
+    r_hd.bold = True
+    r_hd.font.size = Pt(14)
+    
+    doubts = data.get("doubts_and_clarifications") or []
+    for d in doubts:
+        q = d.get("question") or ""
+        a = d.get("answer") or ""
+        p_d = doc.add_paragraph(style="List Bullet")
+        p_d.add_run("Q: ").bold = True
+        p_d.add_run(f"{q}   ")
+        p_d.add_run("A: ").bold = True
+        p_d.add_run(str(a))
+        
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    # 3. ASSIGNMENTS & FOLLOW-UPS
+    header_assign = doc.add_paragraph()
+    r_ha = header_assign.add_run("3. ASSIGNMENTS & FOLLOW-UPS")
+    r_ha.bold = True
+    r_ha.font.size = Pt(14)
+    
+    assignments = data.get("assignments_and_follow_ups") or []
+    for a in assignments:
+        desc = a.get("description") or ""
+        due = a.get("due_date") or ""
+        p_a = doc.add_paragraph(style="List Bullet")
+        p_a.add_run("[ ] ")
+        p_a.add_run(f"{desc}   ")
+        p_a.add_run("Due: ").bold = True
+        p_a.add_run(str(due))
+        
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    # 4. RESOURCES REFERENCED
+    header_res = doc.add_paragraph()
+    r_hr = header_res.add_run("4. RESOURCES REFERENCED")
+    r_hr.bold = True
+    r_hr.font.size = Pt(14)
+    
+    resources = data.get("resources_referenced") or []
+    for res in resources:
+        doc.add_paragraph(str(res), style="List Bullet")
+        
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    # 5. SESSION SUMMARY
+    header_summ = doc.add_paragraph()
+    r_hs = header_summ.add_run("5. SESSION SUMMARY")
+    r_hs.bold = True
+    r_hs.font.size = Pt(14)
+    
+    summ = data.get("session_summary") or ""
+    doc.add_paragraph(str(summ))
+
+    # SAVE DOCUMENT
+    try:
+        doc.save(path)
+        print("[OK] Online Session DOCX saved:", path)
+    except Exception as e:
+        print("[ERROR] DOCX save failed:", e)
+        raise

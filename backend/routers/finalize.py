@@ -39,7 +39,7 @@ async def finalize(request: FinalizeRequest):
     session_id = request.session_id
     session    = get_session(session_id)
 
-    # ── Auto-create session if it doesn't exist ────────────────
+    # ── Auto-create session if it doesn't exist ──────────────
     # This handles direct API testing without prior chunk uploads
     if not session:
         create_session(session_id, request.participants, [
@@ -84,7 +84,7 @@ async def run_pipeline(session_id: str):
 
         # ── Step 2: Speaker mapping ────────────────────────────
         print("Running speaker mapping...")
-        chunks           = get_all_chunks(session_id)
+        chunks = get_all_chunks(session_id)
         speaker_timeline = session.get("speaker_timeline", [])
         tagged_transcript = assign_speakers(chunks, speaker_timeline)
 
@@ -98,10 +98,27 @@ async def run_pipeline(session_id: str):
         participants = session.get("participants", [])
         meeting_date = datetime.now().strftime("%Y-%m-%d")
 
+        # Calculate duration based on the last event in the timeline
+        speaker_timeline = session.get("speaker_timeline", [])
+        duration_minutes = "Unknown"
+        
+        # We need `chunks` to calculate fallback duration
+        chunks = get_all_chunks(session_id)
+        
+        if speaker_timeline:
+            last_timestamp = speaker_timeline[-1].get("timestamp_ms", 0)
+            mins = round(last_timestamp / (1000 * 60))
+            duration_minutes = str(mins) if mins > 0 else "< 1"
+        elif chunks:
+            # Fallback: each chunk is roughly 30 seconds
+            mins = round((len(chunks) * 30) / 60)
+            duration_minutes = str(mins) if mins > 0 else "< 1"
+
         mom_json = await generate_mom(
             block_summaries=block_summaries,
             participants=participants,
             meeting_date=meeting_date,
+            duration_minutes=duration_minutes,
         )
 
         # ── Step 5: Refinement pass ────────────────────────────
