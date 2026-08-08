@@ -9,6 +9,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// When the extension icon is clicked, toggle the widget visibility
+chrome.action.onClicked.addListener((tab) => {
+  chrome.storage.local.get(['nc_visible'], (data) => {
+    const isVisible = data.nc_visible !== false; // default true
+    chrome.storage.local.set({ nc_visible: !isVisible });
+  });
+});
+
 /**
  * Uploads merged audio chunks and metadata to the backend.
  */

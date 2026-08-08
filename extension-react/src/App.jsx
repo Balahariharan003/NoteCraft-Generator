@@ -23,7 +23,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Square, Download, RefreshCw, Minus, Loader2 } from 'lucide-react';
+import { Play, Square, Download, RefreshCw, Minus, Loader2, X } from 'lucide-react';
 
 /* ── helpers ──────────────────────────────────────────────────── */
 
@@ -56,6 +56,7 @@ const App = ({ mode = 'popup' }) => {
   const [sessionId,      setSessionId]      = useState(null);
   const [transcript,     setTranscript]     = useState('');
   const [downloadUrl,    setDownloadUrl]    = useState('');
+  const [isVisible,      setIsVisible]      = useState(true);
 
   /* ── refs (immune to render cycles) ── */
   const posRef       = useRef(DEFAULT_POS); // always reflects latest position
@@ -84,7 +85,7 @@ const App = ({ mode = 'popup' }) => {
     if (typeof chrome === 'undefined' || !chrome?.storage?.local) return;
 
     chrome.storage.local.get(
-      ['currentState', 'elapsedSeconds', 'nc_minimized', 'nc_pos', 'currentSession', 'transcript', 'downloadUrl'],
+      ['currentState', 'elapsedSeconds', 'nc_minimized', 'nc_pos', 'currentSession', 'transcript', 'downloadUrl', 'nc_visible'],
       (data) => {
         setScreen(mapStateToScreen(data.currentState));
         const sec = data.elapsedSeconds || 0;
@@ -94,6 +95,7 @@ const App = ({ mode = 'popup' }) => {
         setSessionId(data.currentSession || null);
         setTranscript(data.transcript || '');
         setDownloadUrl(data.downloadUrl || '');
+        setIsVisible(data.nc_visible !== false);
         // Always validate the stored position
         if (data.nc_pos) {
           const p = safePos(data.nc_pos);
@@ -104,6 +106,11 @@ const App = ({ mode = 'popup' }) => {
     );
 
     const onStorageChange = (changes) => {
+      // Re-show widget if a recording actually starts (ignore 'idle' reset)
+      if (changes.currentState && ['recording', 'processing', 'ready'].includes(changes.currentState.newValue)) {
+        setIsVisible(true);
+      }
+
       if (changes.currentState) {
         setScreen(mapStateToScreen(changes.currentState.newValue));
       }
@@ -114,6 +121,9 @@ const App = ({ mode = 'popup' }) => {
       }
       if (changes.nc_minimized) {
         setIsMinimized(changes.nc_minimized.newValue !== undefined ? Boolean(changes.nc_minimized.newValue) : false);
+      }
+      if (changes.nc_visible) {
+        setIsVisible(changes.nc_visible.newValue !== false);
       }
       if (changes.currentSession) {
         setSessionId(changes.currentSession.newValue || null);
@@ -220,6 +230,17 @@ const App = ({ mode = 'popup' }) => {
     window.dispatchEvent(new CustomEvent('nc-session-reset'));
   };
 
+  /**
+   * Completely hides the widget from the screen and resets the session.
+   */
+  const closeWidget = () => {
+    resetSession();
+    setIsVisible(false);
+    if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+      chrome.storage.local.set({ nc_visible: false });
+    }
+  };
+
   /* ── toggle minimise ──
      Called by the FAB (onClick) and by the minus button.
      Suppressed if the pointer just finished a drag.              */
@@ -295,6 +316,11 @@ const App = ({ mode = 'popup' }) => {
      RENDER — single tree, both FAB and card always in the DOM.
      CSS class drives which one is visible.
   ════════════════════════════════════════════════════════════ */
+  
+  if (mode === 'widget' && !isVisible) {
+    return null;
+  }
+
   return (
     <>
       {/* ── MINIMISED FAB BUBBLE ─────────────────────────────── */}
@@ -338,13 +364,22 @@ const App = ({ mode = 'popup' }) => {
           </div>
           <div className="nc-actions">
             {mode === 'widget' && (
-              <button
-                className="nc-action-btn"
-                onClick={toggleMinimize}
-                title="Minimise"
-              >
-                <Minus size={14} />
-              </button>
+              <>
+                <button
+                  className="nc-action-btn"
+                  onClick={toggleMinimize}
+                  title="Minimise"
+                >
+                  <Minus size={14} />
+                </button>
+                <button
+                  className="nc-action-btn nc-close-btn"
+                  onClick={closeWidget}
+                  title="Close NoteCraft"
+                >
+                  <X size={14} />
+                </button>
+              </>
             )}
           </div>
         </div>

@@ -21,7 +21,6 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "index.html",
     "default_title": "NoteCraft AI"
   },
   "content_scripts": [

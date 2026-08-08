@@ -389,6 +389,48 @@
   to   { transform: rotate(360deg); }
 }
 
+/* ── Drop Zone (Drag to close) ───────────────────────── */
+.nc-drop-zone {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 120px;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.9), transparent);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2147483648; /* Above everything */
+  opacity: 0;
+  pointer-events: none;
+  animation: nc-fade-in 0.2s forwards;
+}
+
+.nc-drop-circle {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: rgba(30, 41, 59, 0.8);
+  border: 2px solid rgba(148, 163, 184, 0.3);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transform: translateY(20px);
+}
+
+.nc-drop-zone.active .nc-drop-circle {
+  background: #ef4444; /* Red when active */
+  border-color: #fca5a5;
+  transform: translateY(0) scale(1.15);
+  box-shadow: 0 10px 25px -5px rgba(239, 68, 68, 0.5), 0 8px 10px -6px rgba(239, 68, 68, 0.3);
+}
+
+@keyframes nc-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* ── Popup-mode overrides ─────────────────────────────── */
 body {
   background: var(--nc-bg-card);

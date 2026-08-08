@@ -86,10 +86,14 @@ import styles from './src/styles/global.css?inline';
     try {
       // 1. Wait for permissions FIRST before toggling ANY state
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      tabStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-      
+      tabStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+        selfBrowserSurface: "include"
+      });
+
       const tabAudioTrack = tabStream.getAudioTracks()[0];
-      
+
       // We don't need the video track, stop it immediately to save resources
       tabStream.getVideoTracks().forEach(t => t.stop());
 
@@ -106,21 +110,21 @@ import styles from './src/styles/global.css?inline';
       const destination = audioCtx.createMediaStreamDestination();
       audioCtx.createMediaStreamSource(new MediaStream([tabAudioTrack])).connect(destination);
       const micSource = audioCtx.createMediaStreamSource(micStream);
-      
+
       // Boost mic gain slightly for clarity alongside tab stream
-      const gain = audioCtx.createGain(); 
+      const gain = audioCtx.createGain();
       gain.gain.value = 1.5;
-      micSource.connect(gain); 
+      micSource.connect(gain);
       gain.connect(destination);
 
       audioStream = destination.stream;
-      
+
       // If user stops sharing within Chrome's native UI bar
       tabAudioTrack.onended = stopRecording;
 
       // 3. Sync state to React via Background Storage
-      chrome.storage.local.set({ 
-        currentSession, 
+      chrome.storage.local.set({
+        currentSession,
         currentState: 'recording',
         elapsedSeconds: 0
       });
@@ -130,17 +134,17 @@ import styles from './src/styles/global.css?inline';
 
     } catch (err) {
       console.warn('NoteCraft Recording Cancelled/Failed:', err.message);
-      
+
       // Full logical cleanup on failure or denial
       if (micStream) micStream.getTracks().forEach(t => t.stop());
       if (tabStream) tabStream.getTracks().forEach(t => t.stop());
-      if (audioCtx && audioCtx.state !== 'closed') audioCtx.close().catch(() => {});
-      
+      if (audioCtx && audioCtx.state !== 'closed') audioCtx.close().catch(() => { });
+
       // Reset variables so subsequent attempts start fresh
       isRecording = false;
       currentSession = null;
       recordingStart = null;
-      
+
       // Sync idle state so the React UI returns to "Start Recording" elegantly
       chrome.storage.local.set({ currentState: 'idle' });
     }
@@ -176,7 +180,7 @@ import styles from './src/styles/global.css?inline';
     isRecording = false;
     clearInterval(chunkInterval);
     mediaRecorder?.stop();
-    
+
     [micStream, tabStream].forEach(s => s?.getTracks().forEach(t => t.stop()));
     audioCtx?.close();
 
@@ -203,16 +207,16 @@ import styles from './src/styles/global.css?inline';
         const res = await fetch(`${BACKEND_URL}/status?session_id=${currentSession}`);
         if (!res.ok) throw new Error('Status check failed');
         const data = await res.json();
-        
-        if (data.status === 'ready') { 
-          clearInterval(pollId); 
-          chrome.storage.local.set({ currentState: 'ready' }); 
+
+        if (data.status === 'ready') {
+          clearInterval(pollId);
+          chrome.storage.local.set({ currentState: 'ready' });
         } else if (data.status === 'failed') {
           clearInterval(pollId);
           alert("NoteCraft Backend failed to process the meeting.");
           chrome.storage.local.set({ currentState: 'idle' });
         }
-        
+
         // Reset fail count if successful ping
         failCount = 0;
       } catch (e) {
@@ -235,7 +239,7 @@ import styles from './src/styles/global.css?inline';
   const styleTag = document.createElement('style');
   styleTag.textContent = styles;
   shadow.appendChild(styleTag);
-  
+
   const container = document.createElement('div');
   shadow.appendChild(container);
 
@@ -264,7 +268,7 @@ import styles from './src/styles/global.css?inline';
     }
     recordingStart = null;
     if (audioCtx && audioCtx.state !== 'closed') {
-      audioCtx.close().catch(() => {});
+      audioCtx.close().catch(() => { });
     }
     audioCtx = null;
     [micStream, tabStream].forEach(s => s?.getTracks().forEach(t => t.stop()));
@@ -280,7 +284,7 @@ import styles from './src/styles/global.css?inline';
 
   // Also handle direct calls if React is in the same bundle
   // (Since we are importing App here, we can use a bridge)
-  
+
   ReactDOM.createRoot(container).render(
     <React.StrictMode>
       <App mode="widget" />
