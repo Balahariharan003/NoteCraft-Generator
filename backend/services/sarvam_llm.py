@@ -2,6 +2,8 @@ import os
 import json
 import httpx
 from dotenv import load_dotenv
+import time
+from services import metrics_logger
 
 load_dotenv()
 
@@ -10,8 +12,9 @@ MODEL          = os.getenv("LLM_MODEL", "llama3.2:3b")
 OLLAMA_NUM_GPU = int(os.getenv("OLLAMA_NUM_GPU", "99"))
 
 # ── Base LLM caller ────────────────────────────────────────────
-async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 2000, json_mode: bool = False) -> str:
+async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 2000, json_mode: bool = False, session_id: str = None) -> str:
     try:
+        start_time = time.time()
         # Increased timeout to 300.0s for local Ollama running on laptop GPU
         async with httpx.AsyncClient(timeout=300.0) as client:
             payload = {
@@ -37,12 +40,24 @@ async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 2000
                 json=payload,
             )
 
+        latency = time.time() - start_time
         if response.status_code != 200:
             print(f"LLM error: {response.status_code} {response.text}")
             return ""
 
         result  = response.json()
         content = result["choices"][0]["message"]["content"]
+        
+        # Log metrics if tracking session
+        if session_id:
+            # Check for usage stats (OpenAI format or Ollama native format)
+            usage = result.get("usage", {})
+            completion_tokens = usage.get("completion_tokens", 0)
+            if completion_tokens == 0:
+                # Fallback crude estimate if API doesn't return tokens
+                completion_tokens = len(content.split()) * 1.3
+            metrics_logger.log_llm_call(session_id, latency, int(completion_tokens))
+            
         return content.strip()
 
     except httpx.TimeoutException:
@@ -108,7 +123,7 @@ def _parse_json(raw: str) -> dict | None:
 
 
 # ── JOB 1: Clean transcript ────────────────────────────────────
-async def clean_transcript(raw_transcript: str) -> str:
+async def clean_transcript(raw_transcript: str, session_id: str = None) -> str:
     system = (
         "You are a transcript editor. "
         "Clean the given transcript by removing filler words (uh, um, hmm, like), "
@@ -117,7 +132,7 @@ async def clean_transcript(raw_transcript: str) -> str:
         "Return only the cleaned transcript text, nothing else."
     )
     user    = f"Clean this transcript:\n\n{raw_transcript}"
-    cleaned = await _call_llm(system, user)
+    cleaned = await _call_llm(system, user, session_id=session_id)
     return cleaned if cleaned else raw_transcript
 
 
@@ -126,6 +141,7 @@ async def summarise_chunk(
     clean_transcript: str,
     prev_summary:     str = "",
     chunk_index:      int = 0,
+    session_id:       str = None
 ) -> str:
     system = (
         "You are a class note taker. "
@@ -138,23 +154,21 @@ async def summarise_chunk(
         if prev_summary and chunk_index > 0 else ""
     )
     user = f"{context}Summarise this class segment (segment {chunk_index + 1}):\n\n{clean_transcript}"
-    return await _call_llm(system, user)
+    return await _call_llm(system, user, session_id=session_id)
 
 
 # ── JOB 3a: Block aggregation ──────────────────────────────────
-async def aggregate_block(chunk_summaries: list, block_index: int) -> str:
+async def aggregate_block(chunk_summaries: list, block_index: int, session_id: str = None) -> str:
     system = (
         "You are a class note taker. "
         "You are given several segment summaries from an online class. "
         "Merge them into one coherent block summary. "
         "Remove redundancy. Preserve all topics, concepts, and examples. "
-        "Return a clean paragraph-style summary in 4 to 6 sentences."
+        "Write in continuous paragraphs, not bullet points."
     )
-    summaries_text = "\n\n".join(
-        [f"Segment {i+1}:\n{s}" for i, s in enumerate(chunk_summaries)]
-    )
-    user = f"Merge these into one block summary (block {block_index + 1}):\n\n{summaries_text}"
-    return await _call_llm(system, user)
+    summaries_text = "\n\n".join([f"Segment {i+1}:\n{s}" for i, s in enumerate(chunk_summaries)])
+    user = f"Merge these summaries into one block summary:\n\n{summaries_text}"
+    return await _call_llm(system, user, session_id=session_id)
 
 
 # ── JOB 3b: Generate Minutes of Meeting (MoM) ─────────────────
@@ -163,6 +177,8 @@ async def generate_mom(
     participants:    list,
     meeting_date:    str,
     duration_minutes: str = "Unknown",
+    session_id:       str = None,
+    max_retries:      int = 3
 ) -> dict:
 
     system = (
@@ -170,9 +186,11 @@ async def generate_mom(
         "Analyze the provided meeting summaries and determine if the session is a standard business meeting (Minutes of Meeting) OR an educational/training session (Online Session). "
         "Return ONLY valid JSON — no markdown code fences, no extra conversational text.\n\n"
 
-        "CRITICAL RULES:\n"
+        "CRITICAL CLASSIFICATION RULES:\n"
         "1. Automatically infer the domain and context of the meeting from the content. Classify it as either 'mom' or 'online_session'.\n"
-        "2. The JSON MUST have a 'document_type' field set to either 'mom' or 'online_session'.\n"
+        "   -> Choose 'mom' ONLY for business meetings, corporate updates, project planning, and administrative discussions.\n"
+        "   -> Choose 'online_session' for ANY academic class, university lecture, tutorial, or educational training (e.g., Computer Science, Operating Systems, Math, Tech tutorials). If someone is teaching or explaining academic concepts, it is an 'online_session'.\n"
+        "2. The JSON MUST have a 'document_type' field set to exactly either 'mom' or 'online_session'.\n"
         "3. Depending on the 'document_type', the rest of the JSON must follow the respective schema below.\n\n"
 
         "SCHEMA FOR 'mom':\n"
@@ -251,34 +269,55 @@ async def generate_mom(
         f"Generate the Minutes of Meeting JSON now following the exact schema required."
     )
 
-    raw    = await _call_llm(system, user, max_tokens=2000, json_mode=True)
-    parsed = _parse_json(raw)
-
-    if parsed:
-        if not parsed.get("date"):
-            parsed["date"] = meeting_date
-        if not parsed.get("venue_platform"):
-            parsed["venue_platform"] = "Google Meet"
-        if not parsed.get("members_present") and participants:
-            parsed["members_present"] = participants
-        return parsed
+    for attempt in range(max_retries):
+        if session_id:
+            metrics_logger.log_json_attempt(session_id, success=False)
+            
+        print(f"Generating MoM (Attempt {attempt + 1})...")
+        response = await _call_llm(system, user, max_tokens=4000, json_mode=True, session_id=session_id)
+        
+        parsed = _parse_json(response)
+        if parsed:
+            if session_id:
+                # Overwrite the last attempt to success
+                metrics_logger.session_metrics[session_id]["json_successes"] += 1
+            if not parsed.get("date"):
+                parsed["date"] = meeting_date
+            if not parsed.get("venue_platform"):
+                parsed["venue_platform"] = "Google Meet"
+            if not parsed.get("members_present") and participants:
+                parsed["members_present"] = participants
+            return parsed
 
     print("Failed to parse MoM JSON — using fallback template")
     return _fallback_notes(participants, meeting_date)
 
 
-# ── JOB 4: Refinement pass ────────────────────────────────────
-async def refine_mom(mom_json: dict) -> dict:
+# ── JOB 4: Refinement Pass ──────────────────────────────────────
+async def refine_mom(draft_json: dict, max_retries: int = 3, session_id: str = None) -> dict:
     system = (
         "You are a professional Document Editor. "
         "Refine and improve the given JSON Document (which is either Minutes of Meeting or Online Session Notes). "
-        "Ensure professional tone, remove duplicate points, fix grammar, and strictly maintain the original JSON structure. "
-        "Return ONLY valid JSON. No markdown code blocks, no extra text."
+        "Fix grammar, improve professional tone, and ensure fields are strictly typed. "
+        "Do NOT change the schema structure. Return ONLY valid JSON."
     )
-    user   = f"Refine this JSON:\n\n{json.dumps(mom_json, indent=2)}"
-    raw    = await _call_llm(system, user, max_tokens=2000, json_mode=True)
-    parsed = _parse_json(raw)
-    return parsed if parsed else mom_json
+    user = f"Refine this JSON:\n\n{json.dumps(draft_json, indent=2)}"
+
+    for attempt in range(max_retries):
+        if session_id:
+            metrics_logger.log_json_attempt(session_id, success=False)
+            
+        print(f"Refining MoM (Attempt {attempt + 1})...")
+        response = await _call_llm(system, user, max_tokens=4000, json_mode=True, session_id=session_id)
+        
+        parsed = _parse_json(response)
+        if parsed:
+            if session_id:
+                metrics_logger.session_metrics[session_id]["json_successes"] += 1
+            return parsed
+
+    print("Failed to refine MoM JSON — returning unrefined draft")
+    return draft_json
 
 
 # ── Fallback ───────────────────────────────────────────────────

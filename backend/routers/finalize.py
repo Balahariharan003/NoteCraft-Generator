@@ -23,6 +23,7 @@ from services.sarvam_llm import (
 )
 from services.speaker_map import assign_speakers
 from services.export import export_documents
+from services import metrics_logger
 
 router = APIRouter()
 
@@ -119,26 +120,31 @@ async def run_pipeline(session_id: str):
             participants=participants,
             meeting_date=meeting_date,
             duration_minutes=duration_minutes,
+            session_id=session_id
         )
 
         # ── Step 5: Refinement pass ────────────────────────────
-        # Comment this out to use Fast mode
-        print("Running refinement pass...")
-        mom_json = await refine_mom(mom_json)
+        print("Refining MoM...")
+        final_json = await refine_mom(mom_json, session_id=session_id)
+        save_mom(session_id, final_json)
 
-        save_mom(session_id, mom_json)
-
-        # ── Step 6: Export PDF + DOCX ──────────────────────────
-        print("Exporting documents...")
-        pdf_url, docx_url = export_documents(mom_json, session_id)
+        # ── Step 6: Document generation ────────────────────────
+        print("Exporting Document...")
+        pdf_url, docx_url = export_documents(final_json, session_id)
         save_urls(session_id, pdf_url, docx_url)
 
-        # ── Done ───────────────────────────────────────────────
+        # ── Metrics: Compression Ratio & Finalize ───────────────
+        raw_len = sum(len(c.get("raw", "")) for c in chunks)
+        final_len = len(str(final_json))
+        metrics_logger.set_compression_stats(session_id, raw_len, final_len)
+        metrics_logger.finalize_metrics(session_id, status="completed")
+
         set_status(session_id, "ready")
         print(f"Pipeline complete for session {session_id}")
 
     except Exception as e:
         print(f"Pipeline error for session {session_id}: {e}")
+        metrics_logger.finalize_metrics(session_id, status="failed")
         set_status(session_id, "failed")
 
 
@@ -177,25 +183,26 @@ async def _aggregate_blocks(session_id: str, chunks: list) -> list:
     Example: 40 chunks / 5 per group = 8 block summaries
     """
     # Collect all chunk summaries in order
-    summaries = [
+    chunk_summaries = [
         c.get("summary", "") for c in chunks
         if c.get("status") == "ok" and c.get("summary")
     ]
 
-    if not summaries:
+    if not chunk_summaries:
         return ["No meeting content could be extracted."]
 
     # Split into groups of CHUNK_GROUP_SIZE
     groups = [
-        summaries[i : i + CHUNK_GROUP_SIZE]
-        for i in range(0, len(summaries), CHUNK_GROUP_SIZE)
+        chunk_summaries[i : i + CHUNK_GROUP_SIZE]
+        for i in range(0, len(chunk_summaries), CHUNK_GROUP_SIZE)
     ]
 
     # Aggregate each group into one block summary
     block_summaries = []
-    for block_index, group in enumerate(groups):
-        print(f"Aggregating block {block_index + 1} of {len(groups)}...")
-        block_summary = await aggregate_block(group, block_index)
+    total_blocks = len(groups)
+    for i, group in enumerate(groups):
+        print(f"Aggregating block {i+1}/{total_blocks}...")
+        block_summary = await aggregate_block(group, i, session_id=session_id)
         block_summaries.append(block_summary)
 
     return block_summaries

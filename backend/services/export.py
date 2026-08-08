@@ -494,45 +494,54 @@ def _generate_online_session_docx(data: dict, path: str):
     topics = data.get("topics_covered") or []
     for t_idx, topic in enumerate(topics, start=1):
         p_topic = doc.add_paragraph()
+        p_topic.paragraph_format.space_before = Pt(14)
+        p_topic.paragraph_format.space_after = Pt(4)
         r_tname = p_topic.add_run(f"1.{t_idx} {topic.get('topic_name') or 'Topic'}")
         r_tname.bold = True
         r_tname.font.size = Pt(12)
         
         summary = topic.get("summary")
         if summary:
-            p_summ = doc.add_paragraph(style="List Bullet")
+            p_summ = doc.add_paragraph()
             p_summ.add_run("Summary: ").bold = True
             p_summ.add_run(str(summary))
+            p_summ.paragraph_format.space_after = Pt(6)
         
         key_points = topic.get("key_points") or []
         if key_points:
-            p_kp = doc.add_paragraph(style="List Bullet")
+            p_kp = doc.add_paragraph()
             p_kp.add_run("Key Points:").bold = True
+            p_kp.paragraph_format.space_after = Pt(2)
             for kp in key_points:
-                p_sub = doc.add_paragraph(style="List Bullet 2")
+                p_sub = doc.add_paragraph(style="List Bullet")
                 p_sub.add_run(str(kp))
+                p_sub.paragraph_format.space_after = Pt(2)
                 
         defs = topic.get("definitions") or []
         if defs:
-            p_def = doc.add_paragraph(style="List Bullet")
+            p_def = doc.add_paragraph()
             p_def.add_run("Definitions:").bold = True
+            p_def.paragraph_format.space_before = Pt(6)
+            p_def.paragraph_format.space_after = Pt(2)
             for d in defs:
-                p_sub = doc.add_paragraph(style="List Bullet 2")
+                p_sub = doc.add_paragraph(style="List Bullet")
                 term = d.get("term") or ""
                 explanation = d.get("explanation") or ""
                 r_term = p_sub.add_run(f"{term} — ")
                 r_term.bold = True
                 p_sub.add_run(str(explanation))
+                p_sub.paragraph_format.space_after = Pt(2)
 
         examples = topic.get("examples") or []
         if examples:
-            p_ex = doc.add_paragraph(style="List Bullet")
+            p_ex = doc.add_paragraph()
             p_ex.add_run("Examples / Demonstrations:").bold = True
+            p_ex.paragraph_format.space_before = Pt(6)
+            p_ex.paragraph_format.space_after = Pt(2)
             for ex in examples:
-                p_sub = doc.add_paragraph(style="List Bullet 2")
+                p_sub = doc.add_paragraph(style="List Bullet")
                 p_sub.add_run(str(ex))
-                
-        doc.add_paragraph().paragraph_format.space_after = Pt(6)
+                p_sub.paragraph_format.space_after = Pt(2)
 
     # 2. DOUBTS & CLARIFICATIONS
     header_doubts = doc.add_paragraph()

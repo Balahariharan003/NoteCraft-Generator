@@ -92,7 +92,7 @@ async def process_chunk(session_id: str, chunk_index: int, audio_bytes: bytes):
         words          = stt_result["words"]
 
         # ── Step 2: Clean transcript ───────────────────────────
-        cleaned = await clean_transcript(raw_transcript)
+        cleaned = await clean_transcript(raw_transcript, session_id=session_id)
 
         # ── Step 3: Get previous chunk summary for context ─────
         prev_summary = _get_prev_summary(session_id, chunk_index)
@@ -102,6 +102,7 @@ async def process_chunk(session_id: str, chunk_index: int, audio_bytes: bytes):
             clean_transcript=cleaned,
             prev_summary=prev_summary,
             chunk_index=chunk_index,
+            session_id=session_id
         )
 
         # ── Save all results ───────────────────────────────────
