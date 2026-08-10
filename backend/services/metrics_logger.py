@@ -47,8 +47,8 @@ def set_compression_stats(session_id: str, raw_length: int, final_length: int):
         session_metrics[session_id]["compression_ratio"] = final_length / raw_length
 
 def finalize_metrics(session_id: str, status: str = "completed"):
-    if session_id not in session_metrics:
-        return
+    # Ensure the session exists in memory, even if it failed early before metrics were logged
+    _ensure_session(session_id)
         
     metrics = session_metrics[session_id]
     metrics["status"] = status

@@ -79,9 +79,22 @@ npm run build
 > **Manual Step**: Go to `chrome://extensions`, enable **Developer Mode**, click **Load Unpacked**, and select the `dist` folder.
 
 ### 3️⃣ Backend Activation
+1. Navigate to the backend directory:
 ```bash
 cd backend
-create a .env file 
+```
+
+2. Create a `.env` file in the `backend` directory and add your configuration (like your local LLM URL and API keys):
+```env
+# Example .env configuration
+#STT_DEVICE=cuda
+#STT_COMPUTE_TYPE=float16
+#LLM_MODEL=llama3.2:3b
+#LLM_URL=http://localhost:11434/v1/chat/completions
+```
+
+3. Install dependencies and run the server:
+```bash
 pip install -r requirements.txt
 python run.py
 ```
