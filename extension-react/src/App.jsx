@@ -57,6 +57,8 @@ const App = ({ mode = 'popup' }) => {
   const [transcript,     setTranscript]     = useState('');
   const [downloadUrl,    setDownloadUrl]    = useState('');
   const [isVisible,      setIsVisible]      = useState(true);
+  const [isGenerating,   setIsGenerating]   = useState(false);
+  const [generationLang, setGenerationLang] = useState(null);
 
   /* ── refs (immune to render cycles) ── */
   const posRef       = useRef(DEFAULT_POS); // always reflects latest position
@@ -193,6 +195,26 @@ const App = ({ mode = 'popup' }) => {
     chrome.storage.local.get(['currentSession'], (data) => {
       window.open(`http://localhost:8000/download/${data.currentSession}`, '_blank');
     });
+  };
+
+  const handleGenerate = async (lang) => {
+    setIsGenerating(true);
+    setGenerationLang(lang);
+    try {
+      const res = await fetch(`http://localhost:8000/generate_mom_doc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, language: lang })
+      });
+      if (!res.ok) throw new Error('Generation failed');
+      const data = await res.json();
+      window.open(`http://localhost:8000${data.docx_url}`, '_blank');
+    } catch (err) {
+      alert(`Failed to generate ${lang === 'en' ? 'English' : 'Tamil'} MoM.`);
+    } finally {
+      setIsGenerating(false);
+      setGenerationLang(null);
+    }
   };
 
   /**
@@ -420,13 +442,25 @@ const App = ({ mode = 'popup' }) => {
 
           {(screen === 'complete' || screen === 'ready') && (
             <div className="nc-content">
-              <p className="nc-title-text" style={{ color: '#10b981' }}>✓ Notes Ready!</p>
-              <button onClick={handleDownload} className="nc-btn nc-btn-success">
-                <Download size={16} /> Download DOCX
-              </button>
-              <button onClick={resetSession} className="nc-btn nc-btn-ghost">
-                <RefreshCw size={14} /> New Session
-              </button>
+              {isGenerating ? (
+                <>
+                  <p className="nc-title-text">Generating MoM in {generationLang === 'en' ? 'English' : 'Tamil'}...</p>
+                  <Loader2 className="nc-spin" style={{ margin: '8px auto', display: 'block' }} />
+                </>
+              ) : (
+                <>
+                  <p className="nc-title-text" style={{ color: '#10b981' }}>✓ Notes Ready!</p>
+                  <button onClick={() => handleGenerate('en')} className="nc-btn nc-btn-primary" style={{ marginBottom: '8px' }}>
+                    Generate MoM – English
+                  </button>
+                  <button onClick={() => handleGenerate('ta')} className="nc-btn nc-btn-primary" style={{ marginBottom: '8px' }}>
+                    Generate MoM – Tamil
+                  </button>
+                  <button onClick={resetSession} className="nc-btn nc-btn-ghost">
+                    <RefreshCw size={14} /> New Session
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
