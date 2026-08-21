@@ -11,7 +11,6 @@ let lastGoodChunk = null; // Backup buffer to prevent 0B chunks
 // Handle messages from the background script
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.target !== 'offscreen') return false;
-
   switch (msg.action) {
     case 'PING':
       sendResponse({ ok: true });
