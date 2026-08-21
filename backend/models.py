@@ -65,106 +65,42 @@ class ChunkData(BaseModel):
     status:  str = "pending"
 
 
-# ── MoM Item Models ─────────────────────────────────────────────
-class AttendeeItem(BaseModel):
-    title_or_name: str
-    role: Optional[str] = None
-
-
-class RepresentativeDiscussion(BaseModel):
-    entity_name:        str
-    points:             List[str] = []
-    action_departments: Optional[List[str]] = []
-
-
-class OfficerResponse(BaseModel):
-    department_or_officer: str
-    response:              str = ""
-    points:                Optional[List[str]] = []
-
-
-class SignatoryInfo(BaseModel):
-    name:           Optional[str] = None
-    designation:    Optional[str] = None
-    location:       Optional[str] = None
-    signature_date: Optional[str] = None
-
-
+# ── MoM Category Discussion ─────────────────────────────────────
 class CategoryDiscussion(BaseModel):
     category_name: str
     points:        List[str] = []
 
 
+# ── Responsibility & Target Date Item ───────────────────────────
 class ResponsibilityItem(BaseModel):
     category_name:  str
     responsibility: str = "All"
     target_date:    str = "Continuous"
 
 
-# ── Universal Standard MoM Output Schema (Source-Grounded) ──────
+# ── Universal Standard MoM Output Schema ────────────────────────
 class StandardMoMOutput(BaseModel):
-    document_type:                Optional[str] = "mom"
-    session_title:                Optional[str] = None  # No hardcoded default
-    district_or_location:         Optional[str] = None  # No hardcoded default
-    presided_by:                  Optional[str] = None
-    convened_by:                  Optional[str] = None
-    meeting_no:                   Optional[str] = None
-    date:                         Optional[str] = None
-    time:                         Optional[str] = None
-    venue_platform:               Optional[str] = None  # No hardcoded default
-    subject:                      Optional[str] = None
-    reference:                    Optional[str] = None
-    intro_paragraph:              Optional[str] = None
-    opening_exhibition_or_remarks: Optional[str] = None
+    # Metadata Header
+    session_title:       Optional[str] = "Minutes of the Meeting"
+    meeting_no:          Optional[str] = None
+    date:                Optional[str] = None
+    time:                Optional[str] = None
+    venue_platform:      Optional[str] = "Google Meet"
 
     # Attendees
-    members_representatives:      Optional[List[str]] = None
-    special_invitees_departments: Optional[List[str]] = None
-    members_present:              Optional[List[str]] = None
+    members_present:     Optional[List[str]] = None
 
-    # Source-Grounded Content Sections
-    topics_discussed:             Optional[List[str]] = None
-    key_points:                   Optional[List[str]] = None
-    decisions_taken:              Optional[List[str]] = None
-    action_items:                 Optional[List[str]] = None
+    # Discussion & Action Sections
+    points_discussed:      Optional[List[CategoryDiscussion]] = None
+    responsibility_matrix: Optional[List[ResponsibilityItem]] = None
+    information_items:     Optional[List[str]] = None
 
-    # Agenda & Discussion Sections (only if present in source)
-    welcome_address:              Optional[dict] = None
-    chairperson_address:          Optional[List[str]] = None
-    chairperson_suggestions:      Optional[List[str]] = None
-    representative_points:        Optional[List[RepresentativeDiscussion]] = None
-    officer_responses:            Optional[List[OfficerResponse]] = None
-    vote_of_thanks:               Optional[str] = None
+    # Distribution & Sign-off
+    copy_to:             Optional[List[str]] = None
+    copy_submitted_to:   Optional[List[str]] = None
+    signatory_name:      Optional[str] = None
+    signatory_designation: Optional[str] = None
+    signature_date:      Optional[str] = None
 
-    # Signatories
-    convener_signatory:           Optional[SignatoryInfo] = None
-    chairperson_signatory:        Optional[SignatoryInfo] = None
-    order_signatory:              Optional[SignatoryInfo] = None
-
-    # Legacy & fallback compatibility
-    points_discussed:             Optional[List[CategoryDiscussion]] = None
-    responsibility_matrix:        Optional[List[ResponsibilityItem]] = None
-    information_items:            Optional[List[str]] = None
-    copy_to:                      Optional[List[str]] = None
-    copy_submitted_to:            Optional[List[str]] = None
-    signatory_name:               Optional[str] = None
-    signatory_designation:        Optional[str] = None
-    signature_date:               Optional[str] = None
-    categories:                   Optional[List[dict]] = None
-
-
-# ── Cross-Language Validation Report ───────────────────────────
-class ValidationReport(BaseModel):
-    status:               str = "PASS"  # PASS, WARNING, FAIL
-    english_field_count:  int = 0
-    tamil_field_count:    int = 0
-    english_only_fields:  List[str] = []
-    tamil_only_fields:    List[str] = []
-    missing_translations: List[str] = []
-    null_consistency:     bool = True
-
-
-# ── /generate-mom ──────────────────────────────────────────────
-class GenerateMomRequest(BaseModel):
-    session_id: str
-    language:   str = "en"  # "en" or "ta"
+    # Legacy fields mapping compatibility
+    categories:          Optional[List[dict]] = None

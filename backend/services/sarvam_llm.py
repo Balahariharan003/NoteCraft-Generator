@@ -1,21 +1,21 @@
 import os
 import json
 import httpx
-import time
 from dotenv import load_dotenv
+import time
 from services import metrics_logger
 
 load_dotenv()
 
 LLM_URL        = os.getenv("LLM_URL", "http://localhost:11434/v1/chat/completions")
-MODEL          = os.getenv("LLM_MODEL", "qwen2.5:7b")
+MODEL          = os.getenv("LLM_MODEL", "llama3.2:3b")
 OLLAMA_NUM_GPU = int(os.getenv("OLLAMA_NUM_GPU", "99"))
 
-
 # ── Base LLM caller ────────────────────────────────────────────
-async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 3000, json_mode: bool = False, session_id: str = None) -> str:
+async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 2000, json_mode: bool = False, session_id: str = None) -> str:
     try:
         start_time = time.time()
+        # Increased timeout to 300.0s for local Ollama running on laptop GPU
         async with httpx.AsyncClient(timeout=300.0) as client:
             payload = {
                 "model":       MODEL,
@@ -24,7 +24,7 @@ async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 3000
                     {"role": "user",   "content": user_prompt},
                 ],
                 "max_tokens":  max_tokens,
-                "temperature": 0.05,  # Minimal temperature to prevent hallucination
+                "temperature": 0.3,
                 "options": {
                     "num_gpu": OLLAMA_NUM_GPU
                 }
@@ -34,52 +34,47 @@ async def _call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 3000
 
             response = await client.post(
                 LLM_URL,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                },
                 json=payload,
             )
 
         latency = time.time() - start_time
         if response.status_code != 200:
-            print(f"[LLM ERROR] {response.status_code}: {response.text}")
+            print(f"LLM error: {response.status_code} {response.text}")
             return ""
 
-        result = response.json()
+        result  = response.json()
         content = result["choices"][0]["message"]["content"]
         
+        # Log metrics if tracking session
         if session_id:
+            # Check for usage stats (OpenAI format or Ollama native format)
             usage = result.get("usage", {})
             completion_tokens = usage.get("completion_tokens", 0)
             if completion_tokens == 0:
+                # Fallback crude estimate if API doesn't return tokens
                 completion_tokens = len(content.split()) * 1.3
             metrics_logger.log_llm_call(session_id, latency, int(completion_tokens))
             
         return content.strip()
 
+    except httpx.TimeoutException:
+        print("LLM request timed out")
+        return ""
     except Exception as e:
-        print(f"[LLM ERROR] Exception calling LLM: {e}")
+        print(f"LLM unexpected error: {e}")
         return ""
 
 
-# ── Robust JSON Parser ─────────────────────────────────────────
-def _fix_unicode_escapes(obj):
-    if isinstance(obj, str):
-        try:
-            if r'\u' in obj or r'\U' in obj:
-                return obj.encode('utf-8').decode('unicode_escape')
-        except Exception:
-            pass
-        return obj
-    elif isinstance(obj, list):
-        return [_fix_unicode_escapes(item) for item in obj]
-    elif isinstance(obj, dict):
-        return {k: _fix_unicode_escapes(v) for k, v in obj.items()}
-    return obj
-
-
+# ── Parse JSON safely ──────────────────────────────────────────
 def _parse_json(raw: str) -> dict | None:
     if not raw:
         return None
     clean = raw.strip()
+    
+    # Extract content between first '{' and last '}'
     try:
         start = clean.index("{")
         end   = clean.rindex("}") + 1
@@ -87,6 +82,7 @@ def _parse_json(raw: str) -> dict | None:
     except ValueError:
         return None
 
+    # Handle unescaped control characters (newlines, tabs) inside string literals inline
     result = []
     in_string = False
     escape = False
@@ -110,336 +106,250 @@ def _parse_json(raw: str) -> dict | None:
                 result.append(char)
     json_content = "".join(result)
 
+    # Try parsing standard JSON
     try:
-        return _fix_unicode_escapes(json.loads(json_content))
+        return json.loads(json_content)
     except json.JSONDecodeError:
         pass
 
+    # Try removing trailing commas before closing braces/brackets
     import re
     json_content_cleaned = re.sub(r',\s*([\]}])', r'\1', json_content)
     try:
-        return _fix_unicode_escapes(json.loads(json_content_cleaned))
+        return json.loads(json_content_cleaned)
     except Exception as e:
-        print(f"[JSON PARSE ERROR] {e}")
+        print(f"JSON Parsing fully failed: {e}")
         return None
 
 
-def _clean_null_strings(data):
-    """Recursively convert string 'null', 'None', 'N/A', empty strings to actual None."""
-    if isinstance(data, str):
-        if data.strip().lower() in ("null", "none", "n/a", "not available", "not mentioned", "not stated", ""):
-            return None
-        return data
-    elif isinstance(data, list):
-        cleaned = [_clean_null_strings(item) for item in data]
-        cleaned = [item for item in cleaned if item is not None]
-        return cleaned if cleaned else None
-    elif isinstance(data, dict):
-        cleaned = {k: _clean_null_strings(v) for k, v in data.items()}
-        return cleaned
-    return data
-
-
-# ── Standard Administrative Tamil Dictionary ────────────────────
-STANDARD_TAMIL_TERMS = {
-    "Water Resources Department": "நீர்வள ஆதாரத்துறை",
-    "Agriculture Department": "வேளாண்மைத்துறை",
-    "Animal Husbandry Department": "கால்நடை பராமரிப்புத்துறை",
-    "Horticulture Department": "தோட்டக்கலைத்துறை",
-    "Pollution Control Board": "மாசுக்கட்டுப்பாட்டு வாரியம்",
-    "Tamil Nadu Pollution Control Board": "தமிழ்நாடு மாசுக்கட்டுப்பாட்டு வாரியம்",
-    "TANGEDCO": "தமிழ்நாடு மின்சார வாரியம்",
-    "Tamil Nadu Electricity Board": "தமிழ்நாடு மின்சார வாரியம்",
-    "Electricity Board": "தமிழ்நாடு மின்சார வாரியம்",
-    "Forest Department": "வனத்துறை",
-    "Cooperation Department": "கூட்டுறவுத்துறை",
-    "Agricultural Marketing Department": "வேளாண் விற்பனைத்துறை",
-    "District Revenue Officer": "மாவட்ட வருவாய் அலுவலர்",
-    "District Collector": "மாவட்ட ஆட்சித்தலைவர்",
-    "Personal Assistant (Agriculture)": "நேர்முக உதவியாளர்(வேளாண்மை)",
-    "Personal Assistant": "நேர்முக உதவியாளர்",
-    "Revenue Department": "வருவாய்த்துறை",
-    "Civil Supplies Corporation": "தமிழ்நாடு நுகர்பொருள் வாணிபக்கழகம்",
-    "Highways Department": "நெடுஞ்சாலைத்துறை",
-    "Rural Development": "ஊரக வளர்ச்சித்துறை",
-    "Chairperson": "தலைவர்",
-    "Co-Chairman": "துணைத் தலைவர்",
-    "Convener": "ஒருங்கிணைப்பாளர்",
-    "Member": "உறுப்பினர்",
-    "Lead Bank Manager": "முன்னோடி வங்கி மேலாளர்",
-}
-
-def _apply_standard_tamil_terms(data):
-    if isinstance(data, str):
-        text = data
-        for eng, tam in STANDARD_TAMIL_TERMS.items():
-            if eng in text:
-                text = text.replace(eng, tam)
-        return text
-    elif isinstance(data, list):
-        return [_apply_standard_tamil_terms(item) for item in data]
-    elif isinstance(data, dict):
-        return {k: _apply_standard_tamil_terms(v) for k, v in data.items()}
-    return data
-
-
-# ── STEP 1: Clean Transcript (Noise & Stutter Removal Only) ─────
+# ── JOB 1: Clean transcript ────────────────────────────────────
 async def clean_transcript(raw_transcript: str, session_id: str = None) -> str:
-    if not raw_transcript or len(raw_transcript.strip()) < 5:
-        return raw_transcript
-
     system = (
-        "You are a precise transcript cleaner. "
-        "Remove filler words (uh, um, hmm, like, ok ok) and repeated stuttering. "
-        "STRICT RULES:\n"
-        "1. Preserve the EXACT language and script.\n"
-        "2. Do NOT summarize, shorten, or paraphrase.\n"
-        "3. Do NOT add ANY new information, context, or names.\n"
-        "4. Return ONLY the cleaned transcript text."
+        "You are a transcript editor. "
+        "Clean the given transcript by removing filler words (uh, um, hmm, like), "
+        "fixing obvious speech recognition errors, and removing repeated phrases. "
+        "Do not summarise — preserve all content and meaning. "
+        "Return only the cleaned transcript text, nothing else."
     )
-    user = f"Clean this transcript verbatim:\n\n{raw_transcript}"
-    cleaned = await _call_llm(system, user, max_tokens=2500, session_id=session_id)
+    user    = f"Clean this transcript:\n\n{raw_transcript}"
+    cleaned = await _call_llm(system, user, session_id=session_id)
     return cleaned if cleaned else raw_transcript
 
 
-# ── STEP 2: Extract Verified Source Facts with Evidence ─────────
-async def extract_verified_facts(complete_transcript: str, chunks: list = None, session_id: str = None) -> dict:
-    """
-    Extracts structured factual statements where every fact contains direct supporting evidence.
-    """
+# ── JOB 2: Segment summary ─────────────────────────────────────
+async def summarise_chunk(
+    clean_transcript: str,
+    prev_summary:     str = "",
+    chunk_index:      int = 0,
+    session_id:       str = None
+) -> str:
     system = (
-        "You are an evidence extraction engine. "
-        "Your task is to extract ALL factual statements, discussions, decisions, numbers, dates, and requests "
-        "from the provided complete transcript.\n\n"
-        "CRITICAL RULES:\n"
-        "1. EVERY FACT MUST BE STRICTLY SUPPORTED BY THE TRANSCRIPT.\n"
-        "2. For each fact, include the exact quoted 'evidence' sentence from the transcript.\n"
-        "3. Do NOT infer, assume, or fabricate any detail.\n"
-        "4. Output valid JSON in the exact schema below:\n\n"
-        "{\n"
-        '  "facts": [\n'
-        '    {\n'
-        '      "fact": "Factual statement in Tamil or English exactly as spoken",\n'
-        '      "evidence": "Direct quote from transcript containing this fact",\n'
-        '      "category": "grievance | decision | information | response | action"\n'
-        '    }\n'
-        '  ]\n'
-        "}\n"
+        "You are a class note taker. "
+        "Summarise the given class session segment in 3 to 5 bullet points. "
+        "Focus on: topics explained, concepts taught, examples given, and questions asked. "
+        "Be concise. Each bullet should be one clear sentence."
     )
-    user = f"Extract all verified facts with exact evidence from this complete transcript:\n\n{complete_transcript}"
-    
-    print("[LLM] Extracting verified facts with source evidence...")
-    response = await _call_llm(system, user, max_tokens=3500, json_mode=True, session_id=session_id)
-    parsed = _parse_json(response)
-    
-    if parsed and isinstance(parsed, dict) and "facts" in parsed:
-        facts = parsed["facts"]
-        print(f"[LLM] Successfully extracted {len(facts)} verified facts with source evidence.")
-        return parsed
-    
-    # Fallback: line-by-line evidence extraction
-    print("[LLM WARNING] Parsing fallback facts directly from transcript lines...")
-    fallback_facts = []
-    for line in complete_transcript.split("\n"):
-        line_clean = line.strip()
-        if len(line_clean) > 15:
-            fallback_facts.append({
-                "fact": line_clean,
-                "evidence": line_clean,
-                "category": "information"
-            })
-    return {"facts": fallback_facts}
+    context = (
+        f"Context from previous segment:\n{prev_summary}\n\n"
+        if prev_summary and chunk_index > 0 else ""
+    )
+    user = f"{context}Summarise this class segment (segment {chunk_index + 1}):\n\n{clean_transcript}"
+    return await _call_llm(system, user, session_id=session_id)
 
 
-# ── STEP 3: Generate Tamil Minutes of Meeting (Reference Format) ─
-async def generate_tamil_mom(
-    verified_facts: list,
-    complete_transcript: str,
-    meeting_date: str = "",
-    session_id: str = None
+# ── JOB 3a: Block aggregation ──────────────────────────────────
+async def aggregate_block(chunk_summaries: list, block_index: int, session_id: str = None) -> str:
+    system = (
+        "You are a class note taker. "
+        "You are given several segment summaries from an online class. "
+        "Merge them into one coherent block summary. "
+        "Remove redundancy. Preserve all topics, concepts, and examples. "
+        "Write in continuous paragraphs, not bullet points."
+    )
+    summaries_text = "\n\n".join([f"Segment {i+1}:\n{s}" for i, s in enumerate(chunk_summaries)])
+    user = f"Merge these summaries into one block summary:\n\n{summaries_text}"
+    return await _call_llm(system, user, session_id=session_id)
+
+
+# ── JOB 3b: Generate Minutes of Meeting (MoM) ─────────────────
+async def generate_mom(
+    block_summaries: list,
+    participants:    list,
+    meeting_date:    str,
+    duration_minutes: str = "Unknown",
+    session_id:       str = None,
+    max_retries:      int = 3
 ) -> dict:
-    """
-    Generates structured formal Tamil MoM adhering strictly to the Reference PDF structure,
-    populated ONLY with verified source facts.
-    """
-    facts_text = json.dumps(verified_facts, ensure_ascii=False, indent=2)
 
     system = (
-        "You are a Senior Tamil Nadu Government Minute Taker. "
-        "Structure the meeting notes into an official formal Tamil Minutes of Meeting (கூட்ட நடவடிக்கைகள்) document.\n\n"
-        "FORMAT RULES (Mirror Official Reference Document Style):\n"
-        "- session_title: Formal title in Tamil (e.g. '...கூட்ட நடவடிக்கைகள்')\n"
-        "- presided_by: Name and designation ONLY if named in source, else null\n"
-        "- meeting_no: Meeting number ONLY if cited, else null\n"
-        "- date: Date of meeting\n"
-        "- subject: Formal subject (பொருள்) summarizing the discussion\n"
-        "- reference: Official reference (பார்வை) ONLY if cited, else null\n"
-        "- intro_paragraph: Formal opening paragraph in official Tamil\n"
-        "- representative_points: List of representative points with 'entity_name', 'points', and 'action_departments' ONLY if present in source\n"
-        "- officer_responses: List of officer/department responses with 'department_or_officer', 'response', and 'points' ONLY if present in source\n"
-        "- topics_discussed: Comprehensive list of topics covered in the audio\n"
-        "- key_points: Bullet points of all key discussions and figures\n"
-        "- decisions_taken: List of decisions taken ONLY if stated, else null\n"
-        "- action_items: Action directives ONLY if given, else null\n"
-        "- vote_of_thanks: Formal vote of thanks ONLY if actually spoken, else null\n"
-        "- chairperson_signatory: Signatory details ONLY if stated, else null\n"
-        "- order_signatory: Order signatory ONLY if stated, else null\n\n"
-        "ZERO-HALLUCINATION ENFORCEMENT:\n"
-        "1. Populate content ONLY from the verified facts and transcript.\n"
-        "2. If an element (e.g. welcome address, vote of thanks, attendees) is not in the source, set it to null.\n"
-        "3. Output valid JSON matching the schema."
+        "You are an expert Minute Taker, Documentation Specialist, and Educational Note Taker. "
+        "Analyze the provided meeting summaries and determine if the session is a standard business meeting (Minutes of Meeting) OR an educational/training session (Online Session). "
+        "Return ONLY valid JSON — no markdown code fences, no extra conversational text.\n\n"
+
+        "CRITICAL CLASSIFICATION RULES:\n"
+        "1. Automatically infer the domain and context of the meeting from the content. Classify it as either 'mom' or 'online_session'.\n"
+        "   -> Choose 'mom' ONLY for business meetings, corporate updates, project planning, and administrative discussions.\n"
+        "   -> Choose 'online_session' for ANY academic class, university lecture, tutorial, or educational training (e.g., Computer Science, Operating Systems, Math, Tech tutorials). If someone is teaching or explaining academic concepts, it is an 'online_session'.\n"
+        "2. The JSON MUST have a 'document_type' field set to exactly either 'mom' or 'online_session'.\n"
+        "3. Depending on the 'document_type', the rest of the JSON must follow the respective schema below.\n\n"
+
+        "SCHEMA FOR 'mom':\n"
+        "{\n"
+        '  "document_type": "mom",\n'
+        '  "session_title": "Descriptive Meeting Title",\n'
+        '  "meeting_no": "2026-07",\n'
+        '  "date": "YYYY-MM-DD",\n'
+        '  "time": "10:00 AM - 11:30 AM",\n'
+        '  "venue_platform": "Google Meet",\n'
+        '  "members_present": ["Name (Role)", "Name 2 (Role)"],\n'
+        '  "points_discussed": [\n'
+        '    {\n'
+        '      "category_name": "Category 1 Name",\n'
+        '      "points": ["Formal point 1", "Formal point 2"]\n'
+        '    }\n'
+        '  ],\n'
+        '  "responsibility_matrix": [\n'
+        '    {\n'
+        '      "category_name": "Category 1 Name",\n'
+        '      "responsibility": "Designated Person or Team",\n'
+        '      "target_date": "DD.MM.YYYY or Continuous"\n'
+        '    }\n'
+        '  ],\n'
+        '  "information_items": [\n'
+        '    "Informational notice 1",\n'
+        '    "Informational notice 2"\n'
+        '  ],\n'
+        '  "copy_to": ["Recipient 1", "Recipient 2"],\n'
+        '  "copy_submitted_to": ["Higher Authority 1", "Higher Authority 2"],\n'
+        '  "signatory_name": "Name of Secretary / Convener",\n'
+        '  "signatory_designation": "Designation / Role",\n'
+        '  "signature_date": "YYYY-MM-DD"\n'
+        "}\n\n"
+
+        "SCHEMA FOR 'online_session':\n"
+        "{\n"
+        '  "document_type": "online_session",\n'
+        '  "session_title": "Descriptive Session Title",\n'
+        '  "instructor": "Instructor Name (infer if possible)",\n'
+        '  "date": "YYYY-MM-DD",\n'
+        '  "duration_minutes": "Approximate duration if known, else Unknown",\n'
+        '  "platform": "Google Meet",\n'
+        '  "topics_covered": [\n'
+        '    {\n'
+        '      "topic_name": "Topic Name",\n'
+        '      "summary": "Brief summary of the topic",\n'
+        '      "key_points": ["Point 1", "Point 2"],\n'
+        '      "definitions": [\n'
+        '        {"term": "Term", "explanation": "Explanation"}\n'
+        '      ],\n'
+        '      "examples": ["Example 1", "Example 2"]\n'
+        '    }\n'
+        '  ],\n'
+        '  "doubts_and_clarifications": [\n'
+        '    {"question": "What is X?", "answer": "X is Y."}\n'
+        '  ],\n'
+        '  "assignments_and_follow_ups": [\n'
+        '    {"description": "Assignment description", "due_date": "YYYY-MM-DD or Unknown"}\n'
+        '  ],\n'
+        '  "resources_referenced": [\n'
+        '    "Resource 1", "Resource 2"\n'
+        '  ],\n'
+        '  "session_summary": "Overall summary of the entire session."\n'
+        "}"
     )
 
+    summaries_text = "\n\n".join(
+        [f"Block {i+1}:\n{s}" for i, s in enumerate(block_summaries)]
+    )
     user = (
-        f"Meeting Date: {meeting_date}\n\n"
-        f"=== VERIFIED SOURCE FACTS ===\n{facts_text}\n\n"
-        f"=== COMPLETE SOURCE TRANSCRIPT ===\n{complete_transcript}\n\n"
-        f"Generate the official Tamil MoM JSON document now. Use formal written Tamil (எழுத்துத் தமிழ்)."
+        f"Meeting date: {meeting_date}\n"
+        f"Scraped Attendees: {', '.join(participants) if participants else 'Participants'}\n"
+        f"Meeting Duration: {duration_minutes} minutes\n\n"
+        f"Meeting summaries:\n{summaries_text}\n\n"
+        f"Generate the Minutes of Meeting JSON now following the exact schema required."
     )
 
-    print("[LLM] Generating official Tamil MoM document...")
-    response = await _call_llm(system, user, max_tokens=4000, json_mode=True, session_id=session_id)
-    parsed = _parse_json(response)
-    
-    if parsed and isinstance(parsed, dict):
-        if not parsed.get("date"):
-            parsed["date"] = meeting_date
-        cleaned = _clean_null_strings(parsed)
-        return _apply_standard_tamil_terms(cleaned)
+    for attempt in range(max_retries):
+        if session_id:
+            metrics_logger.log_json_attempt(session_id, success=False)
+            
+        print(f"Generating MoM (Attempt {attempt + 1})...")
+        response = await _call_llm(system, user, max_tokens=4000, json_mode=True, session_id=session_id)
+        
+        parsed = _parse_json(response)
+        if parsed:
+            if session_id:
+                # Overwrite the last attempt to success
+                metrics_logger.session_metrics[session_id]["json_successes"] += 1
+            if not parsed.get("date"):
+                parsed["date"] = meeting_date
+            if not parsed.get("venue_platform"):
+                parsed["venue_platform"] = "Google Meet"
+            if not parsed.get("members_present") and participants:
+                parsed["members_present"] = participants
+            return parsed
 
-    # Fallback to minimal skeleton
-    return _build_fallback_tamil_mom(verified_facts, meeting_date)
+    print("Failed to parse MoM JSON — using fallback template")
+    return _fallback_notes(participants, meeting_date)
 
 
-# ── STEP 4: Translate Tamil MoM to English (100% Factual Symmetry)
-async def translate_tamil_to_english_mom(tamil_mom_json: dict, session_id: str = None) -> dict:
-    """
-    Translates verified Tamil MoM JSON into English MoM JSON,
-    ensuring 100% parity across numbers, names, dates, requests, and decisions.
-    """
-    non_null_json = {k: v for k, v in tamil_mom_json.items() if v is not None}
-
+# ── JOB 4: Refinement Pass ──────────────────────────────────────
+async def refine_mom(draft_json: dict, max_retries: int = 3, session_id: str = None) -> dict:
     system = (
-        "You are an expert official bilingual document translator. "
-        "Translate the provided official Tamil Minutes of Meeting JSON into formal English.\n\n"
-        "ABSOLUTE PARITY RULES:\n"
-        "1. Maintain the EXACT same JSON keys and structure.\n"
-        "2. Translate all Tamil statements into clear, professional administrative English.\n"
-        "3. Preserve ALL numbers, dates, statistics, percentages, and proper nouns EXACTLY.\n"
-        "4. Do NOT add new sections or facts that do not exist in the Tamil input.\n"
-        "5. Output ONLY valid JSON."
+        "You are a professional Document Editor. "
+        "Refine and improve the given JSON Document (which is either Minutes of Meeting or Online Session Notes). "
+        "Fix grammar, improve professional tone, and ensure fields are strictly typed. "
+        "Do NOT change the schema structure. Return ONLY valid JSON."
     )
-    user = f"Translate this Tamil MoM JSON into formal English MoM JSON:\n\n{json.dumps(non_null_json, ensure_ascii=False, indent=2)}"
+    user = f"Refine this JSON:\n\n{json.dumps(draft_json, indent=2)}"
 
-    print("[LLM] Translating Tamil MoM to English with 100% factual symmetry...")
-    response = await _call_llm(system, user, max_tokens=4000, json_mode=True, session_id=session_id)
-    parsed = _parse_json(response)
+    for attempt in range(max_retries):
+        if session_id:
+            metrics_logger.log_json_attempt(session_id, success=False)
+            
+        print(f"Refining MoM (Attempt {attempt + 1})...")
+        response = await _call_llm(system, user, max_tokens=4000, json_mode=True, session_id=session_id)
+        
+        parsed = _parse_json(response)
+        if parsed:
+            if session_id:
+                metrics_logger.session_metrics[session_id]["json_successes"] += 1
+            return parsed
 
-    if parsed and isinstance(parsed, dict) and len(parsed) >= 3:
-        for key in tamil_mom_json:
-            if tamil_mom_json[key] is None and key not in parsed:
-                parsed[key] = None
-        return _clean_null_strings(parsed)
-
-    # Fallback: preserve structure with English translation for strings
-    print("[LLM WARNING] Fallback field-level translation...")
-    return _fallback_field_translation(tamil_mom_json)
-
-
-# ── STEP 5: Cross-Language & Source Evidence Validation Gate ───
-def validate_cross_language(tamil_json: dict, english_json: dict, complete_transcript: str = "") -> dict:
-    """
-    Audits fact count, numbers, null consistency, and transcript trace.
-    """
-    report = {
-        "status":               "PASS",
-        "tamil_field_count":    0,
-        "english_field_count":  0,
-        "tamil_key_points":     0,
-        "english_key_points":   0,
-        "mismatches":           [],
-        "source_grounding":     "PASS",
-        "consistency":          "PASS",
-    }
-
-    ta_fields = {k for k, v in tamil_json.items() if v is not None}
-    en_fields = {k for k, v in english_json.items() if v is not None}
-
-    report["tamil_field_count"] = len(ta_fields)
-    report["english_field_count"] = len(en_fields)
-
-    # Check key points parity
-    ta_pts = tamil_json.get("key_points") or []
-    en_pts = english_json.get("key_points") or []
-    report["tamil_key_points"] = len(ta_pts) if isinstance(ta_pts, list) else 0
-    report["english_key_points"] = len(en_pts) if isinstance(en_pts, list) else 0
-
-    if isinstance(ta_pts, list) and isinstance(en_pts, list):
-        if len(ta_pts) != len(en_pts):
-            report["mismatches"].append(f"Key points count mismatch: Tamil ({len(ta_pts)}) vs English ({len(en_pts)})")
-            report["consistency"] = "WARNING"
-
-    # Check null consistency
-    for k in set(tamil_json.keys()).union(english_json.keys()):
-        ta_val = tamil_json.get(k)
-        en_val = english_json.get(k)
-        if (ta_val is None) != (en_val is None):
-            report["mismatches"].append(f"Null mismatch in field '{k}'")
-            report["consistency"] = "WARNING"
-
-    if len(report["mismatches"]) > 3:
-        report["status"] = "FAIL"
-    elif report["mismatches"]:
-        report["status"] = "WARNING"
-
-    return report
+    print("Failed to refine MoM JSON — returning unrefined draft")
+    return draft_json
 
 
-# ── Helper fallbacks ───────────────────────────────────────────
-def _build_fallback_tamil_mom(verified_facts: list, meeting_date: str) -> dict:
-    facts = verified_facts if isinstance(verified_facts, list) else verified_facts.get("facts", [])
-    pts = [f.get("fact", "") for f in facts if isinstance(f, dict) and f.get("fact")]
-    if not pts:
-        pts = ["கூட்ட விவாதம் பதிவு செய்யப்பட்டது."]
-
+# ── Fallback ───────────────────────────────────────────────────
+def _fallback_notes(participants: list, date: str) -> dict:
     return {
-        "document_type":         "mom",
-        "session_title":         f"கூட்ட நடவடிக்கைகள் - {meeting_date}" if meeting_date else "கூட்ட நடவடிக்கைகள்",
-        "district_or_location":  None,
-        "presided_by":           None,
-        "convened_by":           None,
-        "meeting_no":            None,
-        "date":                  meeting_date or None,
-        "time":                  None,
-        "venue_platform":        None,
-        "subject":               "கூட்டம் நடைபெற்றது - கூட்ட நடவடிக்கைகள் - தொடர்பாக.",
-        "reference":             None,
-        "intro_paragraph":       f"{meeting_date} அன்று நடைபெற்ற கூட்டத்தில் விவாதிக்கப்பட்ட முக்கிய அம்சங்கள் கீழே தொகுக்கப்பட்டுள்ளன." if meeting_date else "கூட்டத்தில் விவாதிக்கப்பட்ட முக்கிய அம்சங்கள் கீழே தொகுக்கப்பட்டுள்ளன.",
-        "topics_discussed":      ["கூட்ட நடவடிக்கைகள்"],
-        "key_points":            pts,
-        "decisions_taken":       None,
-        "action_items":          None,
-        "representative_points": None,
-        "officer_responses":     None,
-        "vote_of_thanks":        None,
-        "chairperson_signatory": None,
-        "order_signatory":       None,
+        "document_type":       "mom",
+        "session_title":       "Minutes of the Meeting",
+        "meeting_no":          f"{date[:7]}/01" if date else "2026-07/01",
+        "date":                date,
+        "time":                "Scheduled Session",
+        "venue_platform":      "Google Meet",
+        "members_present":     participants if participants else ["Attendees"],
+        "points_discussed": [
+            {
+                "category_name": "General Discussion",
+                "points": ["The team conducted a meeting review. Please refer to recording for complete transcript."]
+            }
+        ],
+        "responsibility_matrix": [
+            {
+                "category_name": "General Discussion",
+                "responsibility": "All Members",
+                "target_date": "Continuous"
+            }
+        ],
+        "information_items": [
+            "Session recorded and archived automatically.",
+            "Further details will be circulated in due course."
+        ],
+        "copy_to":             ["All Meeting Attendees"],
+        "copy_submitted_to":   ["Management / Department Head"],
+        "signatory_name":      "Meeting Secretary",
+        "signatory_designation": "Convener",
+        "signature_date":      date,
     }
-
-
-def _fallback_field_translation(tamil_json: dict) -> dict:
-    eng = {}
-    for k, v in tamil_json.items():
-        if v is None:
-            eng[k] = None
-        elif k in ["date", "time", "meeting_no", "document_type"]:
-            eng[k] = v
-        elif k == "session_title":
-            eng[k] = "Minutes of the Meeting"
-        elif k == "subject":
-            eng[k] = "Meeting Proceedings - Reg."
-        elif k == "intro_paragraph":
-            eng[k] = "The meeting was held and key discussions were recorded as follows."
-        else:
-            eng[k] = v
-    return eng
