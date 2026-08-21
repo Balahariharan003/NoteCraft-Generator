@@ -149,7 +149,6 @@ import styles from './src/styles/global.css?inline';
       chrome.storage.local.set({ currentState: 'idle' });
     }
   }
-
   function recordChunk() {
     if (!audioStream || !isRecording) return;
     const index = chunkIndex++;
